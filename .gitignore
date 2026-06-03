@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual Env
+venv/
+.venv/
+
+# Node
+node_modules/
+dist/
+build/
+
+# VSCode
+.vscode/
+
+# JetBrains
+.idea/
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+
+# Temporary
+temp/
+tmp/
+
+# Uploaded files
+uploads/
+
+# NDE/HDF5 Data
+*.nde
+*.h5
+*.hdf5
