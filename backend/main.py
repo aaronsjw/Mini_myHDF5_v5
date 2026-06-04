@@ -1,5 +1,5 @@
 
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import tempfile
@@ -8,6 +8,10 @@ import json
 import h5py
 import numpy as np
 import pandas as pd
+import shutil
+import glob
+import zipfile
+
 
 app = FastAPI()
 
@@ -28,6 +32,7 @@ app.add_middleware(
 )
 
 current_file = None
+current_zip = None
 current_filename = "modified.nde"
 
 @app.post("/upload")
@@ -42,7 +47,12 @@ async def upload(file: UploadFile = File(...)):
     temp.write(await file.read())
     temp.close()
 
-    current_file = temp.name
+    if suffix.lower() == ".zip":
+        global current_zip
+        current_zip = temp.name
+    else:
+        current_file = temp.name
+
     current_filename = file.filename
 
     return {"message": "uploaded"}
@@ -346,3 +356,105 @@ def download_nde():
         filename=filename,
         media_type="application/octet-stream"
     )
+
+
+@app.post("/batch_save_defect_type")
+async def batch_save_defect_type(
+    defectType: str = Form(...)
+):
+    import tempfile, zipfile, os, glob, h5py, json
+
+    if not current_zip:
+        return {"success": False, "error": "No ZIP uploaded"}
+
+    work_dir = tempfile.mkdtemp()
+    extract_dir = os.path.join(work_dir, "extract")
+    os.makedirs(extract_dir)
+
+    # 解压已上传的 ZIP
+    with zipfile.ZipFile(current_zip, "r") as z:
+        z.extractall(extract_dir)
+
+    nde_files = glob.glob(os.path.join(extract_dir, "**", "*.nde"), recursive=True)
+    updated = 0
+
+    # for nde in nde_files:
+    #     try:
+    #         with h5py.File(nde, "r+") as f:
+    #             ds = f["/Private/GlobalLabel"]
+    #             raw = ds[()]
+    #             if isinstance(raw, bytes):
+    #                 obj = json.loads(raw.decode("utf-8"))
+    #                 # obj["defectType"] = defectType
+    #                 # ds[()] = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+    #                 # updated += 1
+    #                 obj["defectType"] = defectType
+
+    #                 ds[()] = json.dumps(
+    #                     obj,
+    #                     ensure_ascii=False
+    #                 ).encode("utf-8")
+
+    #                 updated += 1
+
+    #                 dirname = os.path.dirname(nde)
+
+    #                 old_name = os.path.basename(nde)
+    #                 print("OLD NAME =", old_name)
+
+    #                 parts = old_name.split("_")
+
+    #                 if len(parts) >= 6:
+
+    #                     parts[4] = defectType
+
+    #                     new_name = "_".join(parts)
+    #                     print("NEW NAME =", new_name)
+
+    #                     os.rename(
+    #                         nde,
+    #                         os.path.join(
+    #                             dirname,
+    #                             new_name
+    #                         )
+    #                     )
+    #     except Exception as e:
+    #         print("skip", nde, e)
+
+    for nde in nde_files:
+        try:
+            # 修改内容
+            with h5py.File(nde, "r+") as f:
+                ds = f["/Private/GlobalLabel"]
+                raw = ds[()]
+                if isinstance(raw, bytes):
+                    obj = json.loads(raw.decode("utf-8"))
+                    obj["defectType"] = defectType
+                    ds[()] = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+                    updated += 1
+
+            # 关闭文件后再重命名
+            dirname = os.path.dirname(nde)
+            old_name = os.path.basename(nde)
+            parts = old_name.split("_")
+            labels = ["OK","Dl","Db","Po","Vo","In","Fb","Rs","Uc"]
+            for i, p in enumerate(parts):
+                if p in labels:
+                    parts[i] = defectType
+                    break
+            new_name = "_".join(parts)
+            os.rename(nde, os.path.join(dirname, new_name))
+
+        except Exception as e:
+            print("skip", nde, e)
+
+    # 重新打包成 ZIP
+    output_zip = os.path.join(work_dir, f"batch_{defectType}.zip")
+    with zipfile.ZipFile(output_zip, "w", zipfile.ZIP_DEFLATED) as z:
+        for root, _, files in os.walk(extract_dir):
+            for file_name in files:
+                full_path = os.path.join(root, file_name)
+                arcname = os.path.relpath(full_path, extract_dir)
+                z.write(full_path, arcname)
+
+    return FileResponse(output_zip, filename=f"batch_{defectType}.zip", media_type="application/zip")

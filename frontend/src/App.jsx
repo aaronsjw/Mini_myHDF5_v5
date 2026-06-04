@@ -7,270 +7,372 @@ import MatrixViewer from './components/MatrixViewer'
 import InspectPancel from './components/InspectPanel'
 
 import {
-  Layout,
-  Upload,
-  Button,
-  Tree,
-  Tag,
-  Tabs
+    Layout,
+    Upload,
+    Button,
+    Tree,
+    Tag,
+    Tabs,
+    Select
 } from 'antd'
 
 const { Sider, Content } = Layout
 
 export default function App() {
 
-  const [treeData, setTreeData] = useState([])
-  const [info, setInfo] = useState(null)
-  const [currentPath, setCurrentPath] = useState('')
-  const [editableJson, setEditableJson] = useState(null)
-  const [wave, setWave] = useState([])
-  const [heatmap, setHeatmap] = useState(null)
-  const [frames, setFrames] = useState([])
-  const [frameIndex, setFrameIndex] = useState(0)
-  const [currentFile, setCurrentFile] = useState('')
-  const [colorMap, setColorMap] = useState('Greys')
+    const [treeData, setTreeData] = useState([])
+    const [info, setInfo] = useState(null)
+    const [currentPath, setCurrentPath] = useState('')
+    const [editableJson, setEditableJson] = useState(null)
+    const [wave, setWave] = useState([])
+    const [heatmap, setHeatmap] = useState(null)
+    const [frames, setFrames] = useState([])
+    const [frameIndex, setFrameIndex] = useState(0)
+    const [currentFile, setCurrentFile] = useState('')
+    const [colorMap, setColorMap] = useState('Greys')
 
-  const [playing, setPlaying] = useState(false)
-  const [playSpeed, setPlaySpeed] = useState(100)
-  const playTimer = useRef(null)
+    const [playing, setPlaying] = useState(false)
+    const [playSpeed, setPlaySpeed] = useState(100)
+    const playTimer = useRef(null)
 
-  const [xDim, setXDim] = useState('D2')
-  const [yDim, setYDim] = useState('D0')
-  const [reverseX, setReverseX] = useState(false)
-  const [reverseY, setReverseY] = useState(false)
+    const [xDim, setXDim] = useState('D2')
+    const [yDim, setYDim] = useState('D0')
+    const [reverseX, setReverseX] = useState(false)
+    const [reverseY, setReverseY] = useState(false)
 
-  const [expandedKeys, setExpandedKeys] = useState([])
+    const [expandedKeys, setExpandedKeys] = useState([])
+    const [batchDefectType, setBatchDefectType] = useState('OK')
+    //   const [folderFiles,setFolderFiles] = useState([])
 
-  const heatmapHeight = heatmap
-    ? Math.max(300, Math.min(heatmap.length * 6, 800))
-    : 400
+    const heatmapHeight = heatmap
+        ? Math.max(300, Math.min(heatmap.length * 6, 800))
+        : 400
 
-  // =========================================
-  // Upload
-  // =========================================
-  const uploadFile = async (file) => {
-    setInfo(null)
-    setEditableJson(null)
-    setWave([])
-    setHeatmap(null)
-    setFrames([])
-    setFrameIndex(0)
-    setTreeData([])
-    setCurrentFile(file.name)
+    // =========================================
+    // Upload
+    // =========================================
+    const uploadFile = async (file) => {
+        setInfo(null)
+        setEditableJson(null)
+        setWave([])
+        setHeatmap(null)
+        setFrames([])
+        setFrameIndex(0)
+        setTreeData([])
+        setCurrentFile(file.name)
 
-    const form = new FormData()
-    form.append('file', file)
+        // const form = new FormData()
+        // form.append('file', file)
+        // await axios.post('http://127.0.0.1:8000/upload', form)
 
-    await axios.post('http://127.0.0.1:8000/upload', form)
-    const res = await axios.get('http://127.0.0.1:8000/tree')
-    setTreeData(res.data)
-    setExpandedKeys(getAllKeys(res.data))
-    return false
-  }
+        const form = new FormData()
 
-  // =========================================
-  // Upload 递归展开
-  // =========================================
-  const getAllKeys = (nodes) => {
-
-    let keys = []
-
-    nodes.forEach(node => {
-
-        keys.push(node.key)
-
-        if (node.children?.length) {
-
-        keys = keys.concat(
-            getAllKeys(node.children)
+        form.append(
+            'file',
+            file
         )
+
+        const resUpload =
+            await axios.post(
+                'http://127.0.0.1:8000/upload',
+                form
+            )
+
+        // zip模式不加载tree
+        if (
+            file.name
+                .toLowerCase()
+                .endsWith('.zip')
+        ) {
+
+            setCurrentFile(
+                file.name
+            )
+
+            return false
         }
-    })
 
-    return keys
+
+        const res = await axios.get('http://127.0.0.1:8000/tree')
+        setTreeData(res.data)
+        setExpandedKeys(getAllKeys(res.data))
+        return false
     }
 
-  // =========================================
-  // Select Dataset
-  // =========================================
-  const onSelect = async (_, nodeInfo) => {
-    const node = nodeInfo.node
-    setCurrentPath(node.path)
-    const res = await axios.get('http://127.0.0.1:8000/dataset', {
-      params: { path: node.path }
-    })
-    const d = res.data
-    setInfo(d)
-    setEditableJson(d)
-    setWave([])
-    setHeatmap(null)
-    setFrames([])
+    // =========================================
+    // Upload 递归展开
+    // =========================================
+    const getAllKeys = (nodes) => {
 
-    if (d.type === 'waveform') setWave(d.data || [])
-    if (d.type === 'image') setHeatmap(d.image)
-    if (d.type === 'nde_tensor') {
-      setFrames(d.bscan)
-      setHeatmap(d.bscan)
-      setWave(d.ascan)
-      setFrameIndex(0)
+        let keys = []
+
+        nodes.forEach(node => {
+
+            keys.push(node.key)
+
+            if (node.children?.length) {
+
+                keys = keys.concat(
+                    getAllKeys(node.children)
+                )
+            }
+        })
+
+        return keys
     }
-  }
 
-  // =========================================
-  // JSON Edit
-  // =========================================
-  const handleJsonEdit = (edit) => {
-    setEditableJson(edit.updated_src)
-    return true
-  }
+    // =========================================
+    // Select Dataset
+    // =========================================
+    const onSelect = async (_, nodeInfo) => {
+        const node = nodeInfo.node
+        setCurrentPath(node.path)
+        const res = await axios.get('http://127.0.0.1:8000/dataset', {
+            params: { path: node.path }
+        })
+        const d = res.data
+        setInfo(d)
+        setEditableJson(d)
+        setWave([])
+        setHeatmap(null)
+        setFrames([])
 
-  const saveAsJson = () => {
-    const blob = new Blob([JSON.stringify(editableJson, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'dataset.json'
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  // =========================================
-  // A-Scan Auto Play
-  // =========================================
-  useEffect(() => {
-    if (!playing) {
-      clearInterval(playTimer.current)
-      return
-    }
-    playTimer.current = setInterval(() => {
-      setFrameIndex(prev => {
-        const next = prev + 1
-        if (next >= frames.length) {
-          setPlaying(false)
-          return 0
+        if (d.type === 'waveform') setWave(d.data || [])
+        if (d.type === 'image') setHeatmap(d.image)
+        if (d.type === 'nde_tensor') {
+            setFrames(d.bscan)
+            setHeatmap(d.bscan)
+            setWave(d.ascan)
+            setFrameIndex(0)
         }
-        if (frames[next]) setWave(frames[next])
-        return next
-      })
-    }, playSpeed)
-    return () => clearInterval(playTimer.current)
-  }, [playing, frames, playSpeed])
+    }
 
-  // =========================================
-  // Render
-  // =========================================
-  return (
-    <Layout style={{ height: '100vh' }}>
-      {/* LEFT SIDEBAR */}
-      <Sider width={320} style={{ background: '#111', padding: 20, overflow: 'auto' }}>
-        <div style={{ color: '#fff', fontSize: 18, fontWeight: 'bold', textAlign: 'center', marginBottom: 15 }}>
-          复合材料智能检测与评估系统
-        </div>
+    // =========================================
+    // JSON Edit
+    // =========================================
+    const handleJsonEdit = (edit) => {
+        setEditableJson(edit.updated_src)
+        return true
+    }
 
-        {currentFile && (
-          <div style={{ textAlign: 'center', marginBottom: 15 }}>
-            <div style={{ color: '#999', fontSize: 12, marginBottom: 5 }}>Current File</div>
-            <Tag color="cyan" style={{ maxWidth: 260, whiteSpace: 'normal', wordBreak: 'break-all' }}>
-              {currentFile}
-            </Tag>
-          </div>
-        )}
+    const saveAsJson = () => {
+        const blob = new Blob([JSON.stringify(editableJson, null, 2)], { type: 'application/json' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = 'dataset.json'
+        a.click()
+        URL.revokeObjectURL(url)
+    }
 
-        <div style={{ textAlign: 'center' }}>
-          <Upload beforeUpload={uploadFile} showUploadList={false}>
-            <Button type="primary" style={{ width: 220 }}>
-              Upload NDE/HDF5/CSV
-            </Button>
-          </Upload>
-        </div>
+    // =========================================
+    // A-Scan Auto Play
+    // =========================================
+    useEffect(() => {
+        if (!playing) {
+            clearInterval(playTimer.current)
+            return
+        }
+        playTimer.current = setInterval(() => {
+            setFrameIndex(prev => {
+                const next = prev + 1
+                if (next >= frames.length) {
+                    setPlaying(false)
+                    return 0
+                }
+                if (frames[next]) setWave(frames[next])
+                return next
+            })
+        }, playSpeed)
+        return () => clearInterval(playTimer.current)
+    }, [playing, frames, playSpeed])
 
-        <div style={{ marginTop: 20 }}>
-          <Tree treeData={treeData} onSelect={onSelect} 
-            expandedKeys={expandedKeys} 
-            onExpand={keys =>setExpandedKeys(keys)}
-            style={{ background: '#111', color: '#fff' }} />
-        </div>
-      </Sider>
+    // =========================================
+    // Render
+    // =========================================
+    return (
+        <Layout style={{ height: '100vh' }}>
+            {/* LEFT SIDEBAR */}
+            <Sider width={320} style={{ background: '#111', padding: 20, overflow: 'auto' }}>
+                <div style={{ color: '#fff', fontSize: 18, fontWeight: 'bold', textAlign: 'center', marginBottom: 15 }}>
+                    复合材料智能检测与评估系统
+                </div>
 
-      {/* RIGHT CONTENT */}
-      <Content style={{ padding: 20, overflow: 'hidden', background: '#f5f5f5' }}>
-        {info && (
-          <Tabs
-            defaultActiveKey="display"
-            tabBarStyle={{ color: '#fff', background: '#fff', padding: '8px 12px', borderRadius: '8px' }}
-            items={[
-              {
-                key: 'inspect',
-                label: 'Inspect',
-                children: (
-                  <InspectPancel
-                    info={info}
-                    editableJson={editableJson}
-                    handleJsonEdit={handleJsonEdit}
-                    saveAsJson={saveAsJson}
-                    currentPath={currentPath}
-                  />
-                )
-              },
-              {
-                key: 'display',
-                label: 'Display',
-                children: (
-                  <Tabs
-                    defaultActiveKey="heatmap"
-                    items={[
-                      {
-                        key: 'matrix',
-                        label: 'Matrix',
-                        children: (
-                          <MatrixViewer frames={frames} />
-                        )
-                      },
-                      {
-                        key: 'ascan',
-                        label: 'A-Scan',
-                        children: (
-                          <AScanViewer
-                            frames={frames}
-                            wave={wave}
-                            frameIndex={frameIndex}
-                            setFrameIndex={setFrameIndex}
-                            setWave={setWave}
-                            playing={playing}
-                            setPlaying={setPlaying}
-                            playSpeed={playSpeed}
-                            setPlaySpeed={setPlaySpeed}
-                          />
-                        )
-                      },
-                      {
-                        key: 'heatmap',
-                        label: 'Heatmap',
-                        children: (
-                          <HeatmapViewer
-                            heatmap={heatmap}
-                            colorMap={colorMap}
-                            setColorMap={setColorMap}
-                            heatmapHeight={heatmapHeight}
-                            xDim={xDim}
-                            setXDim={setXDim}
-                            yDim={yDim}
-                            setYDim={setYDim}
-                            reverseX={reverseX}
-                            setReverseX={setReverseX}
-                            reverseY={reverseY}
-                            setReverseY={setReverseY}
-                          />
-                        )
-                      }
-                    ]}
-                  />
-                )
-              }
-            ]}
-          />
-        )}
-      </Content>
-    </Layout>
-  )
+                {currentFile && (
+                    <div style={{ textAlign: 'center', marginBottom: 15 }}>
+                        <div style={{ color: '#999', fontSize: 12, marginBottom: 5 }}>Current File</div>
+                        <Tag color="cyan" style={{ maxWidth: 260, whiteSpace: 'normal', wordBreak: 'break-all' }}>
+                            {currentFile}
+                        </Tag>
+                    </div>
+                )}
+
+                <div style={{ textAlign: 'center' }}>
+                    <Upload
+                        accept=".nde, .h5, .hdf5, .csv, .zip"
+                        beforeUpload={uploadFile}
+                        showUploadList={false}
+                    >
+                        <Button type="primary" style={{ width: 220 }}>
+                            Upload NDE/HDF5/CSV
+                        </Button>
+                    </Upload>
+                </div>
+
+                <div style={{ marginTop: 20 }}>
+                    <Tree treeData={treeData} onSelect={onSelect}
+                        expandedKeys={expandedKeys}
+                        onExpand={keys => setExpandedKeys(keys)}
+                        style={{ background: '#111', color: '#fff' }} />
+
+                    <div
+                        style={{
+                            marginTop: 20,
+                            background: '#222',
+                            padding: 10,
+                            borderRadius: 6
+                        }}
+                    >
+
+                        <div
+                            style={{
+                                color: '#fff',
+                                marginBottom: 10
+                            }}
+                        >
+                            Batch Label
+                        </div>
+
+                        <Select
+                            value={batchDefectType}
+                            onChange={setBatchDefectType}
+                            style={{
+                                width: '100%',
+                                marginBottom: 10
+                            }}
+                            options={[
+                                { value: 'OK', label: 'OK' },
+                                { value: 'Dl', label: 'Dl' },
+                                { value: 'Db', label: 'Db' },
+                                { value: 'Po', label: 'Po' },
+                                { value: 'Vo', label: 'Vo' },
+                                { value: 'In', label: 'In' },
+                                { value: 'Fb', label: 'Fb' },
+                                { value: 'Rs', label: 'Rs' },
+                                { value: 'Uc', label: 'Uc' }
+                            ]}
+                        />
+
+                        <Button
+                            type="primary"
+                            block
+                            onClick={async () => {
+                                try {
+                                    const form = new FormData()
+                                    form.append('defectType', batchDefectType)
+                                    const res = await axios.post(
+                                        'http://127.0.0.1:8000/batch_save_defect_type',
+                                        form,
+                                        { responseType: 'blob' }
+                                    )
+                                    const url = window.URL.createObjectURL(new Blob([res.data]))
+                                    const a = document.createElement('a')
+                                    a.href = url
+                                    a.download = `batch_${batchDefectType}.zip`
+                                    a.click()
+                                } catch (err) {
+                                    console.error(err)
+                                    alert(err.message)
+                                }
+                            }}
+                        >
+                            Apply To ZIP
+                        </Button>
+
+                    </div>
+
+                </div>
+            </Sider>
+
+            {/* RIGHT CONTENT */}
+            <Content style={{ padding: 20, overflow: 'hidden', background: '#f5f5f5' }}>
+                {info && (
+                    <Tabs
+                        defaultActiveKey="display"
+                        tabBarStyle={{ color: '#fff', background: '#fff', padding: '8px 12px', borderRadius: '8px' }}
+                        items={[
+                            {
+                                key: 'inspect',
+                                label: 'Inspect',
+                                children: (
+                                    <InspectPancel
+                                        info={info}
+                                        editableJson={editableJson}
+                                        handleJsonEdit={handleJsonEdit}
+                                        saveAsJson={saveAsJson}
+                                        currentPath={currentPath}
+                                    />
+                                )
+                            },
+                            {
+                                key: 'display',
+                                label: 'Display',
+                                children: (
+                                    <Tabs
+                                        defaultActiveKey="heatmap"
+                                        items={[
+                                            {
+                                                key: 'matrix',
+                                                label: 'Matrix',
+                                                children: (
+                                                    <MatrixViewer frames={frames} />
+                                                )
+                                            },
+                                            {
+                                                key: 'ascan',
+                                                label: 'A-Scan',
+                                                children: (
+                                                    <AScanViewer
+                                                        frames={frames}
+                                                        wave={wave}
+                                                        frameIndex={frameIndex}
+                                                        setFrameIndex={setFrameIndex}
+                                                        setWave={setWave}
+                                                        playing={playing}
+                                                        setPlaying={setPlaying}
+                                                        playSpeed={playSpeed}
+                                                        setPlaySpeed={setPlaySpeed}
+                                                    />
+                                                )
+                                            },
+                                            {
+                                                key: 'heatmap',
+                                                label: 'Heatmap',
+                                                children: (
+                                                    <HeatmapViewer
+                                                        heatmap={heatmap}
+                                                        colorMap={colorMap}
+                                                        setColorMap={setColorMap}
+                                                        heatmapHeight={heatmapHeight}
+                                                        xDim={xDim}
+                                                        setXDim={setXDim}
+                                                        yDim={yDim}
+                                                        setYDim={setYDim}
+                                                        reverseX={reverseX}
+                                                        setReverseX={setReverseX}
+                                                        reverseY={reverseY}
+                                                        setReverseY={setReverseY}
+                                                    />
+                                                )
+                                            }
+                                        ]}
+                                    />
+                                )
+                            }
+                        ]}
+                    />
+                )}
+            </Content>
+        </Layout>
+    )
 }
