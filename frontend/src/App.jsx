@@ -42,7 +42,6 @@ export default function App() {
 
     const [expandedKeys, setExpandedKeys] = useState([])
     const [batchDefectType, setBatchDefectType] = useState('OK')
-    //   const [folderFiles,setFolderFiles] = useState([])
 
     const heatmapHeight = heatmap
         ? Math.max(300, Math.min(heatmap.length * 6, 800))
@@ -61,37 +60,15 @@ export default function App() {
         setTreeData([])
         setCurrentFile(file.name)
 
-        // const form = new FormData()
-        // form.append('file', file)
-        // await axios.post('http://127.0.0.1:8000/upload', form)
-
         const form = new FormData()
+        form.append('file', file)
 
-        form.append(
-            'file',
-            file
-        )
+        await axios.post('http://127.0.0.1:8000/upload', form)
 
-        const resUpload =
-            await axios.post(
-                'http://127.0.0.1:8000/upload',
-                form
-            )
-
-        // zip模式不加载tree
-        if (
-            file.name
-                .toLowerCase()
-                .endsWith('.zip')
-        ) {
-
-            setCurrentFile(
-                file.name
-            )
-
+        if (file.name.toLowerCase().endsWith('.zip')) {
+            setCurrentFile(file.name)
             return false
         }
-
 
         const res = await axios.get('http://127.0.0.1:8000/tree')
         setTreeData(res.data)
@@ -103,21 +80,13 @@ export default function App() {
     // Upload 递归展开
     // =========================================
     const getAllKeys = (nodes) => {
-
         let keys = []
-
         nodes.forEach(node => {
-
             keys.push(node.key)
-
             if (node.children?.length) {
-
-                keys = keys.concat(
-                    getAllKeys(node.children)
-                )
+                keys = keys.concat(getAllKeys(node.children))
             }
         })
-
         return keys
     }
 
@@ -193,106 +162,126 @@ export default function App() {
     return (
         <Layout style={{ height: '100vh' }}>
             {/* LEFT SIDEBAR */}
-            <Sider width={320} style={{ background: '#111', padding: 20, overflow: 'auto' }}>
-                <div style={{ color: '#fff', fontSize: 18, fontWeight: 'bold', textAlign: 'center', marginBottom: 15 }}>
-                    复合材料智能检测与评估系统
-                </div>
-
-                {currentFile && (
-                    <div style={{ textAlign: 'center', marginBottom: 15 }}>
-                        <div style={{ color: '#999', fontSize: 12, marginBottom: 5 }}>Current File</div>
-                        <Tag color="cyan" style={{ maxWidth: 260, whiteSpace: 'normal', wordBreak: 'break-all' }}>
-                            {currentFile}
-                        </Tag>
+            {/* LEFT SIDEBAR */}
+            <Sider
+                width={320}
+                style={{
+                    background: '#111',
+                    padding: 20
+                }}
+            >
+                <div
+                    style={{
+                        height: '100%',
+                        display: 'flex',
+                        flexDirection: 'column'
+                    }}
+                >
+                    <div style={{
+                        color: '#fff',
+                        fontSize: 18,
+                        fontWeight: 'bold',
+                        textAlign: 'center',
+                        marginBottom: 15
+                    }}>
+                        复合材料智能检测与评估系统
                     </div>
-                )}
 
-                <div style={{ textAlign: 'center' }}>
-                    <Upload
-                        accept=".nde, .h5, .hdf5, .csv, .zip"
-                        beforeUpload={uploadFile}
-                        showUploadList={false}
-                    >
-                        <Button type="primary" style={{ width: 220 }}>
-                            Upload NDE/HDF5/CSV
-                        </Button>
-                    </Upload>
-                </div>
-
-                <div style={{ marginTop: 20 }}>
-                    <Tree treeData={treeData} onSelect={onSelect}
-                        expandedKeys={expandedKeys}
-                        onExpand={keys => setExpandedKeys(keys)}
-                        style={{ background: '#111', color: '#fff' }} />
-
-                    <div
-                        style={{
-                            marginTop: 20,
-                            background: '#222',
-                            padding: 10,
-                            borderRadius: 6
-                        }}
-                    >
-
-                        <div
-                            style={{
-                                color: '#fff',
-                                marginBottom: 10
-                            }}
-                        >
-                            Batch Label
+                    {currentFile && (
+                        <div style={{ textAlign: 'center', marginBottom: 15 }}>
+                            <div style={{ color: '#999', fontSize: 12, marginBottom: 5 }}>Current File</div>
+                            <Tag color="cyan" style={{ maxWidth: 260, whiteSpace: 'normal', wordBreak: 'break-all' }}>
+                                {currentFile}
+                            </Tag>
                         </div>
+                    )}
 
-                        <Select
-                            value={batchDefectType}
-                            onChange={setBatchDefectType}
-                            style={{
-                                width: '100%',
-                                marginBottom: 10
-                            }}
-                            options={[
-                                { value: 'OK', label: 'OK' },
-                                { value: 'Dl', label: 'Dl' },
-                                { value: 'Db', label: 'Db' },
-                                { value: 'Po', label: 'Po' },
-                                { value: 'Vo', label: 'Vo' },
-                                { value: 'In', label: 'In' },
-                                { value: 'Fb', label: 'Fb' },
-                                { value: 'Rs', label: 'Rs' },
-                                { value: 'Uc', label: 'Uc' }
-                            ]}
+                    <div style={{ textAlign: 'center' }}>
+                        <Upload
+                            accept=".nde, .h5, .hdf5, .csv, .zip"
+                            beforeUpload={uploadFile}
+                            showUploadList={false}
+                        >
+                            <Button type="primary" style={{ width: 220 }}>
+                                Upload NDE/HDF5/CSV
+                            </Button>
+                        </Upload>
+                    </div>
+
+                    <div style={{ marginTop: 20, overflowY: 'auto' }}>
+                        <Tree
+                            treeData={treeData}
+                            onSelect={onSelect}
+                            expandedKeys={expandedKeys}
+                            onExpand={keys => setExpandedKeys(keys)}
+                            style={{ background: '#111', color: '#fff' }}
                         />
 
-                        <Button
-                            type="primary"
-                            block
-                            onClick={async () => {
-                                try {
-                                    const form = new FormData()
-                                    form.append('defectType', batchDefectType)
-                                    const res = await axios.post(
-                                        'http://127.0.0.1:8000/batch_save_defect_type',
-                                        form,
-                                        { responseType: 'blob' }
-                                    )
-                                    const url = window.URL.createObjectURL(new Blob([res.data]))
-                                    const a = document.createElement('a')
-                                    a.href = url
-                                    a.download = `batch_${batchDefectType}.zip`
-                                    a.click()
-                                } catch (err) {
-                                    console.error(err)
-                                    alert(err.message)
-                                }
-                            }}
-                        >
-                            Apply To ZIP
-                        </Button>
+                        <div style={{ marginTop: 20, background: '#222', padding: 10, borderRadius: 6 }}>
+                            <div style={{ color: '#fff', marginBottom: 10 }}>Batch Label</div>
 
+                            <Select
+                                value={batchDefectType}
+                                onChange={setBatchDefectType}
+                                style={{ width: '100%', marginBottom: 10 }}
+                                options={[
+                                    { value: 'OK', label: 'OK' },
+                                    { value: 'Dl', label: 'Dl' },
+                                    { value: 'Db', label: 'Db' },
+                                    { value: 'Po', label: 'Po' },
+                                    { value: 'Vo', label: 'Vo' },
+                                    { value: 'In', label: 'In' },
+                                    { value: 'Fb', label: 'Fb' },
+                                    { value: 'Rs', label: 'Rs' },
+                                    { value: 'Uc', label: 'Uc' }
+                                ]}
+                            />
+
+                            <Button
+                                type="primary"
+                                block
+                                onClick={async () => {
+                                    try {
+                                        const form = new FormData()
+                                        form.append('defectType', batchDefectType)
+                                        const res = await axios.post(
+                                            'http://127.0.0.1:8000/batch_save_defect_type',
+                                            form,
+                                            { responseType: 'blob' }
+                                        )
+                                        const url = window.URL.createObjectURL(new Blob([res.data]))
+                                        const a = document.createElement('a')
+                                        a.href = url
+                                        a.download = `batch_${batchDefectType}.zip`
+                                        a.click()
+                                    } catch (err) {
+                                        console.error(err)
+                                        alert(err.message)
+                                    }
+                                }}
+                            >
+                                Apply To ZIP
+                            </Button>
+                        </div>
                     </div>
 
+                    <div style={{ flex: 1 }} />
+
+                    <div style={{
+                        textAlign: 'center',
+                        color: '#666',
+                        fontSize: 12,
+                        lineHeight: 1.6,
+                        paddingTop: 10,
+                        paddingBottom: 5
+                    }}>
+                        Mini_myHDF5 V5
+                        <br />
+                        Made by Aaron at ZHFC
+                    </div>
                 </div>
             </Sider>
+
 
             {/* RIGHT CONTENT */}
             <Content style={{ padding: 20, overflow: 'hidden', background: '#f5f5f5' }}>
@@ -324,9 +313,7 @@ export default function App() {
                                             {
                                                 key: 'matrix',
                                                 label: 'Matrix',
-                                                children: (
-                                                    <MatrixViewer frames={frames} />
-                                                )
+                                                children: <MatrixViewer frames={frames} />
                                             },
                                             {
                                                 key: 'ascan',
