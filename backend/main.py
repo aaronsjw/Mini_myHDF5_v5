@@ -378,49 +378,7 @@ async def batch_save_defect_type(
     nde_files = glob.glob(os.path.join(extract_dir, "**", "*.nde"), recursive=True)
     updated = 0
 
-    # for nde in nde_files:
-    #     try:
-    #         with h5py.File(nde, "r+") as f:
-    #             ds = f["/Private/GlobalLabel"]
-    #             raw = ds[()]
-    #             if isinstance(raw, bytes):
-    #                 obj = json.loads(raw.decode("utf-8"))
-    #                 # obj["defectType"] = defectType
-    #                 # ds[()] = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-    #                 # updated += 1
-    #                 obj["defectType"] = defectType
-
-    #                 ds[()] = json.dumps(
-    #                     obj,
-    #                     ensure_ascii=False
-    #                 ).encode("utf-8")
-
-    #                 updated += 1
-
-    #                 dirname = os.path.dirname(nde)
-
-    #                 old_name = os.path.basename(nde)
-    #                 print("OLD NAME =", old_name)
-
-    #                 parts = old_name.split("_")
-
-    #                 if len(parts) >= 6:
-
-    #                     parts[4] = defectType
-
-    #                     new_name = "_".join(parts)
-    #                     print("NEW NAME =", new_name)
-
-    #                     os.rename(
-    #                         nde,
-    #                         os.path.join(
-    #                             dirname,
-    #                             new_name
-    #                         )
-    #                     )
-    #     except Exception as e:
-    #         print("skip", nde, e)
-
+    
     for nde in nde_files:
         try:
             # 修改内容
