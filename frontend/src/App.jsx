@@ -289,6 +289,7 @@ export default function App() {
                     <Tabs
                         defaultActiveKey="display"
                         tabBarStyle={{ color: '#fff', background: '#fff', padding: '8px 12px', borderRadius: '8px' }}
+                        
                         items={[
                             {
                                 key: 'inspect',
@@ -303,60 +304,81 @@ export default function App() {
                                     />
                                 )
                             },
-                            {
-                                key: 'display',
-                                label: 'Display',
-                                children: (
-                                    <Tabs
-                                        defaultActiveKey="heatmap"
-                                        items={[
-                                            {
-                                                key: 'matrix',
-                                                label: 'Matrix',
-                                                children: <MatrixViewer frames={frames} />
-                                            },
-                                            {
-                                                key: 'ascan',
-                                                label: 'A-Scan',
-                                                children: (
-                                                    <AScanViewer
-                                                        frames={frames}
-                                                        wave={wave}
-                                                        frameIndex={frameIndex}
-                                                        setFrameIndex={setFrameIndex}
-                                                        setWave={setWave}
-                                                        playing={playing}
-                                                        setPlaying={setPlaying}
-                                                        playSpeed={playSpeed}
-                                                        setPlaySpeed={setPlaySpeed}
-                                                    />
-                                                )
-                                            },
-                                            {
-                                                key: 'heatmap',
-                                                label: 'Heatmap',
-                                                children: (
-                                                    <HeatmapViewer
-                                                        heatmap={heatmap}
-                                                        colorMap={colorMap}
-                                                        setColorMap={setColorMap}
-                                                        heatmapHeight={heatmapHeight}
-                                                        xDim={xDim}
-                                                        setXDim={setXDim}
-                                                        yDim={yDim}
-                                                        setYDim={setYDim}
-                                                        reverseX={reverseX}
-                                                        setReverseX={setReverseX}
-                                                        reverseY={reverseY}
-                                                        setReverseY={setReverseY}
-                                                    />
-                                                )
-                                            }
-                                        ]}
-                                    />
-                                )
-                            }
+
+                            ...(info &&
+                            ['waveform', 'nde_tensor'].includes(info.type)
+                                ? [{
+                                    key: 'display',
+                                    label: (
+                                        <span>
+                                            Display
+                                            {!(
+                                                info &&
+                                                ['waveform', 'nde_tensor'].includes(info.type)
+                                            ) && ' 🔒'}
+                                        </span>
+                                    ),
+                                        disabled: !(
+                                            info &&
+                                            ['waveform', 'nde_tensor'].includes(info.type)
+                                        ),
+                                    children: (
+                                        <Tabs
+                                            defaultActiveKey="heatmap"
+                                            items={[
+                                                {
+                                                    key: 'matrix',
+                                                    label: 'Matrix',
+                                                    children: (
+                                                        <MatrixViewer frames={frames} />
+                                                    )
+                                                },
+                                                {
+                                                    key: 'ascan',
+                                                    label: 'A-Scan',
+                                                    children: (
+                                                        <AScanViewer
+                                                            frames={frames}
+                                                            wave={wave}
+                                                            frameIndex={frameIndex}
+                                                            setFrameIndex={setFrameIndex}
+                                                            setWave={setWave}
+                                                            playing={playing}
+                                                            setPlaying={setPlaying}
+                                                            playSpeed={playSpeed}
+                                                            setPlaySpeed={setPlaySpeed}
+                                                        />
+                                                    )
+                                                },
+                                                {
+                                                    key: 'heatmap',
+                                                    label: 'Heatmap',
+                                                    children: (
+                                                        <HeatmapViewer
+                                                            heatmap={heatmap}
+                                                            colorMap={colorMap}
+                                                            setColorMap={setColorMap}
+                                                            heatmapHeight={heatmapHeight}
+                                                            xDim={xDim}
+                                                            setXDim={setXDim}
+                                                            yDim={yDim}
+                                                            setYDim={setYDim}
+                                                            reverseX={reverseX}
+                                                            setReverseX={setReverseX}
+                                                            reverseY={reverseY}
+                                                            setReverseY={setReverseY}
+                                                        />
+                                                    )
+                                                }
+                                            ]}
+                                        />
+                                    )
+                                }]
+                                : [])
                         ]}
+                   
+
+
                     />
                 )}
             </Content>

@@ -145,7 +145,9 @@ export default function AScanViewer({
                 )
               },
               yAxis:{
-                type:'value'
+                type:'value',
+                min:-2000,
+                max:2000
               },
               series:[
                 {
