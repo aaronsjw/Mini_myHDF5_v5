@@ -188,6 +188,15 @@ export default function App() {
                         复合材料智能检测与评估系统
                     </div>
 
+                    {currentFile && (
+                        <div style={{ margin: '10px 12px 6px', padding: '8px 12px', borderRadius: 6 }}>
+                            <div style={{ color: '#999', fontSize: 12, marginBottom: 4 }}>Current File</div>
+                            <Tag color="cyan" style={{ maxWidth: 260, whiteSpace: 'normal', wordBreak: 'break-all' }}>
+                                {currentFile}
+                            </Tag>
+                        </div>
+                    )}
+
                     {/* Collapsible Panels */}
                     <div style={{ flex: 1, overflow: 'auto' }}>
                         <Collapse
@@ -199,32 +208,22 @@ export default function App() {
                                     key: 'dataset',
                                     label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>Dataset</span>,
                                     children: (
-                                        <div style={{ padding: '0 8px 6px', background: '#666', borderRadius: 6 }}>
-                                            {/* Current File */}
-                                            {currentFile && (
-                                                <div style={{ marginBottom: 6, padding: '6px 0' }}>
-                                                    <div style={{ color: '#999', fontSize: 11, marginBottom: 4 }}>Current File</div>
-                                                    <Tag color="cyan" style={{ maxWidth: 260, whiteSpace: 'normal', wordBreak: 'break-all' }}>
-                                                        {currentFile}
-                                                    </Tag>
-                                                </div>
-                                            )}
+                                        <div style={{ padding: '0 8px 8px', background: '#666', borderRadius: 6 }}>
                                             {/* Upload */}
-                                            <div style={{ marginBottom: 6 }}>
+                                            <div style={{ marginBottom: 14 }}>
                                                 <Upload
                                                     accept=".nde, .h5, .hdf5, .csv, .zip"
                                                     beforeUpload={uploadFile}
                                                     showUploadList={false}
-                                                    style={{ display: 'block' }}
                                                 >
-                                                    <Button type="primary" block size="small" style={{ height: 30 }}>
+                                                    <Button type="primary" block>
                                                         Upload NDE / HDF5 / CSV
                                                     </Button>
                                                 </Upload>
                                             </div>
 
                                             {/* Dataset Tree */}
-                                            <div style={{ marginBottom: 6 }}>
+                                            <div style={{ marginBottom: 14 }}>
                                                 <Tree
                                                     treeData={treeData}
                                                     onSelect={onSelect}
@@ -239,8 +238,7 @@ export default function App() {
                                                 <Select
                                                     value={batchDefectType}
                                                     onChange={setBatchDefectType}
-                                                    style={{ width: '100%', marginBottom: 6, height: 30 }}
-                                                    size="small"
+                                                    style={{ width: '100%', marginBottom: 8 }}
                                                     options={[
                                                         { value: 'OK', label: 'OK' },
                                                         { value: 'Dl', label: 'Dl' },
@@ -256,8 +254,6 @@ export default function App() {
                                                 <Button
                                                     type="primary"
                                                     block
-                                                    size="small"
-                                                    style={{ height: 30 }}
                                                     onClick={async () => {
                                                         try {
                                                             const form = new FormData()
@@ -288,7 +284,7 @@ export default function App() {
                                     key: 'model',
                                     label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>Model</span>,
                                     children: (
-                                        <div style={{ padding: '6px 12px', color: '#666', fontSize: 13, background: '#666', borderRadius: 6 }}>
+                                        <div style={{ padding: '8px 12px', color: '#666', fontSize: 13, background: '#666', borderRadius: 6 }}>
                                             (Coming soon)
                                         </div>
                                     )
@@ -297,7 +293,7 @@ export default function App() {
                                     key: 'test',
                                     label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>Test</span>,
                                     children: (
-                                        <div style={{ padding: '6px 12px', color: '#666', fontSize: 13, background: '#666', borderRadius: 6 }}>
+                                        <div style={{ padding: '8px 12px', color: '#666', fontSize: 13, background: '#666', borderRadius: 6 }}>
                                             (Coming soon)
                                         </div>
                                     )
@@ -306,7 +302,7 @@ export default function App() {
                                     key: 'analysis',
                                     label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>Analysis</span>,
                                     children: (
-                                        <div style={{ padding: '6px 12px', color: '#666', fontSize: 13, background: '#666', borderRadius: 6 }}>
+                                        <div style={{ padding: '8px 12px', color: '#666', fontSize: 13, background: '#666', borderRadius: 6 }}>
                                             (Coming soon)
                                         </div>
                                     )
