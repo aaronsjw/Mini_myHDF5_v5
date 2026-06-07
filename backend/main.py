@@ -416,3 +416,68 @@ async def batch_save_defect_type(
                 z.write(full_path, arcname)
 
     return FileResponse(output_zip, filename=f"batch_{defectType}.zip", media_type="application/zip")
+
+
+@app.get("/dataset_overview")
+def dataset_overview():
+    import re
+
+    base = os.path.join(os.path.dirname(__file__), "..", "dataset")
+    result = {
+        "total_files": 0,
+        "by_defect": {},   # OK: {count, files: [...]}
+        "files": []
+    }
+
+    # 命名规则: {纤维类型}_{基体类型}_{结构}_{检测方法}_{缺陷类型}_{型号}_{时间戳}.nde
+    pattern = re.compile(
+        r"^(\w+)_(\w+)_(\w+)_(\w+)_(\w+)_(\w+)_(\d{14})_(.+)\.nde$"
+    )
+
+    if not os.path.isdir(base):
+        return {"error": "dataset dir not found"}
+
+    for defect_dir in sorted(os.listdir(base)):
+        dir_path = os.path.join(base, defect_dir)
+        if not os.path.isdir(dir_path):
+            continue
+        nde_list = [f for f in os.listdir(dir_path) if f.lower().endswith(".nde")]
+        if not nde_list:
+            continue
+
+        files_info = []
+        for fname in sorted(nde_list):
+            m = pattern.match(fname)
+            if m:
+                files_info.append({
+                    "filename": fname,
+                    "fiber": m.group(1),
+                    "matrix": m.group(2),
+                    "structure": m.group(3),
+                    "method": m.group(4),
+                    "defect": m.group(5),
+                    "model": m.group(6),
+                    "timestamp": m.group(7),
+                    "extra": m.group(8)
+                })
+            else:
+                files_info.append({
+                    "filename": fname,
+                    "fiber": "-",
+                    "matrix": "-",
+                    "structure": "-",
+                    "method": "-",
+                    "defect": defect_dir,
+                    "model": "-",
+                    "timestamp": "-",
+                    "extra": "-"
+                })
+
+        result["by_defect"][defect_dir] = {
+            "count": len(files_info),
+            "files": files_info
+        }
+        result["files"].extend(files_info)
+        result["total_files"] += len(files_info)
+
+    return result

@@ -5,6 +5,7 @@ import HeatmapViewer from './components/HeatmapViewer'
 import AScanViewer from './components/AScanViewer'
 import MatrixViewer from './components/MatrixViewer'
 import InspectPancel from './components/InspectPanel'
+import DatabaseOverview from './components/DatabaseOverview'
 
 import {
     Layout,
@@ -43,6 +44,7 @@ export default function App() {
 
     const [expandedKeys, setExpandedKeys] = useState([])
     const [batchDefectType, setBatchDefectType] = useState('OK')
+    const [activeModule, setActiveModule] = useState('labeling')
 
     const heatmapHeight = heatmap
         ? Math.max(300, Math.min(heatmap.length * 6, 800))
@@ -191,13 +193,15 @@ export default function App() {
                     {/* Collapsible Panels */}
                     <div style={{ flex: 1, overflow: 'auto' }}>
                         <Collapse
-                            defaultActiveKey={['dataset']}
+                            defaultActiveKey={['labeling']}
+                            activeKey={[activeModule]}
+                            onChange={keys => setActiveModule(keys[keys.length - 1])}
                             bordered={false}
                             ghost
                             items={[
                                 {
-                                    key: 'dataset',
-                                    label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>Dataset</span>,
+                                    key: 'labeling',
+                                    label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>数据标注</span>,
                                     children: (
                                         <div style={{ padding: '0 8px 6px', background: '#666', borderRadius: 6 }}>
                                             {/* Current File */}
@@ -285,8 +289,17 @@ export default function App() {
                                     )
                                 },
                                 {
+                                    key: 'dataset',
+                                    label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>数据库</span>,
+                                    children: (
+                                        <div style={{ padding: '6px 12px', color: '#666', fontSize: 13, background: '#666', borderRadius: 6 }}>
+                                            (Coming soon)
+                                        </div>
+                                    )
+                                },
+                                {
                                     key: 'model',
-                                    label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>Model</span>,
+                                    label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>模型训练</span>,
                                     children: (
                                         <div style={{ padding: '6px 12px', color: '#666', fontSize: 13, background: '#666', borderRadius: 6 }}>
                                             (Coming soon)
@@ -295,7 +308,7 @@ export default function App() {
                                 },
                                 {
                                     key: 'test',
-                                    label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>Test</span>,
+                                    label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>模型测试</span>,
                                     children: (
                                         <div style={{ padding: '6px 12px', color: '#666', fontSize: 13, background: '#666', borderRadius: 6 }}>
                                             (Coming soon)
@@ -304,7 +317,7 @@ export default function App() {
                                 },
                                 {
                                     key: 'analysis',
-                                    label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>Analysis</span>,
+                                    label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>智能评估</span>,
                                     children: (
                                         <div style={{ padding: '6px 12px', color: '#666', fontSize: 13, background: '#666', borderRadius: 6 }}>
                                             (Coming soon)
@@ -334,7 +347,11 @@ export default function App() {
 
             {/* RIGHT CONTENT */}
             <Content style={{ padding: 20, overflow: 'hidden', background: '#f5f5f5' }}>
-                {info && (
+                {activeModule === 'dataset' ? (
+                    <div style={{ height: '100%', overflow: 'auto' }}>
+                        <DatabaseOverview />
+                    </div>
+                ) : activeModule === 'labeling' && info ? (
                     <Tabs
                         defaultActiveKey="display"
                         tabBarStyle={{ color: '#fff', background: '#fff', padding: '8px 12px', borderRadius: '8px' }}
@@ -425,11 +442,8 @@ export default function App() {
                                 }]
                                 : [])
                         ]}
-                   
-
-
                     />
-                )}
+                ) : null}
             </Content>
         </Layout>
     )
