@@ -129,7 +129,7 @@ export default function TrainingPanel() {
       radius: ['30%', '55%'],
       center: ['50%', '50%'],
       label: {
-        formatter: '{b}',
+        formatter: '{b} ({d}%)',
         color: '#333',
         fontSize: 12,
         fontWeight: 'bold',

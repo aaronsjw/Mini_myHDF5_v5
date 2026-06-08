@@ -156,7 +156,7 @@ def load_dataset(base_dir=None, max_files=None, progress_callback=None,
     """
     if base_dir is None:
         base_dir = BASE_DIR
-    X_list, y_list = [], []
+    X_list, y_list, file_paths = [], [], []
     class_names = set()
 
     # 找出有数据的缺陷目录
@@ -219,6 +219,8 @@ def load_dataset(base_dir=None, max_files=None, progress_callback=None,
 
                     X_list.append(feats)
                     y_list.append(label)
+                    rel_path = os.path.relpath(fpath, base_dir).replace("\\", "/")
+                    file_paths.append(rel_path)
                     class_names.add(label)
                     loaded += 1
 
@@ -231,7 +233,7 @@ def load_dataset(base_dir=None, max_files=None, progress_callback=None,
     X = np.array(X_list)
     y = np.array(y_list)
     class_list = sorted(class_names)
-    return X, y, class_list, loaded
+    return X, y, class_list, loaded, file_paths
 
 
 # ─── 模型训练 ─────────────────────────────────────
@@ -487,7 +489,7 @@ def load_dataset_raw(base_dir=None, max_files=None, progress_callback=None):
     """
     if base_dir is None:
         base_dir = BASE_DIR
-    X_list, y_list = [], []
+    X_list, y_list, file_paths = [], [], []
     class_set = set()
 
     # 扫描缺陷目录
@@ -537,6 +539,8 @@ def load_dataset_raw(base_dir=None, max_files=None, progress_callback=None):
 
                     X_list.append(data)
                     y_list.append(label)
+                    rel_path = os.path.relpath(fpath, base_dir).replace("\\", "/")
+                    file_paths.append(rel_path)
                     class_set.add(label)
                     loaded += 1
 
@@ -547,7 +551,7 @@ def load_dataset_raw(base_dir=None, max_files=None, progress_callback=None):
                 continue
 
     X = np.stack(X_list, axis=0)
-    return X, np.array(y_list), sorted(class_set), loaded
+    return X, np.array(y_list), sorted(class_set), loaded, file_paths
 
 
 def train_deep_model(X, y, class_list, epochs=20, batch_size=16, lr=1e-3,
@@ -734,7 +738,7 @@ def _run_train(job_id, config):
             if not DEEP_LEARNING_AVAILABLE:
                 raise RuntimeError("PyTorch 未安装，无法训练深度学习模型")
 
-            X_raw, y, class_names, n_loaded = load_dataset_raw(
+            X_raw, y, class_names, n_loaded, _ = load_dataset_raw(
                 progress_callback=progress_callback
             )
 
@@ -764,7 +768,7 @@ def _run_train(job_id, config):
         else:
             # ── 传统机器学习分支（RandomForest） ──
             use_meta = config.get("use_metadata", True)
-            X, y, class_names, n_loaded = load_dataset(
+            X, y, class_names, n_loaded, _ = load_dataset(
                 progress_callback=progress_callback,
                 use_metadata=use_meta,
             )
@@ -900,17 +904,18 @@ def load_model_for_testing(model_name: str):
     return model, meta
 
 
-def run_test(model, meta, X, y_true=None):
+def run_test(model, meta, X, y_true=None, file_paths=None):
     """
     对测试数据运行预测。
     X: [n, n_features] 或 [n, 64, 2000] (深度学习)
     y_true: 真实标签列表（可选）
+    file_paths: 文件路径列表（可选）
 
     返回 dict:
       - predictions: 预测标签列表
       - probabilities: 每个类别的概率（RF）或 None（深度学习）
       - class_names: 类别列表
-      - per_file: [{pred, true, correct}, ...]
+      - per_file: [{pred, true, correct, file_path, probabilities}, ...]
       - accuracy: 准确率（有真实标签时）
       - confusion_matrix: 混淆矩阵
       - classification_report: 分类报告
@@ -962,6 +967,8 @@ def run_test(model, meta, X, y_true=None):
     total_with_label = 0
     for i, pred in enumerate(pred_labels):
         item = {"pred": pred, "probabilities": prob_list[i] if prob_list else None}
+        if file_paths and i < len(file_paths):
+            item["file_path"] = file_paths[i]
         if y_true is not None and i < len(y_true):
             true_label = y_true[i]
             item["true"] = true_label
@@ -1024,11 +1031,11 @@ def _run_test(job_id, config):
         use_meta = config.get("use_metadata", True)
 
         if model_type == "deep_cnn_lstm_transformer":
-            X, y, class_names, n_loaded = load_dataset_raw(
+            X, y, class_names, n_loaded, file_paths = load_dataset_raw(
                 progress_callback=lambda p: None
             )
         else:
-            X, y, class_names, n_loaded = load_dataset(
+            X, y, class_names, n_loaded, file_paths = load_dataset(
                 progress_callback=lambda p: None,
                 use_metadata=use_meta,
             )
@@ -1044,10 +1051,13 @@ def _run_test(job_id, config):
         # 可选：只取部分数据进行测试
         if test_size < 1.0:
             from sklearn.model_selection import train_test_split as tts
-            X, y, _, _ = tts(X, y, test_size=test_size, random_state=42, stratify=y)
+            _, X, _, y, _, file_paths = tts(
+                X, y, file_paths,
+                test_size=test_size, random_state=42, stratify=y
+            )
 
         # 运行测试
-        result = run_test(model, meta, X, y)
+        result = run_test(model, meta, X, y, file_paths=file_paths)
 
         task["status"] = "done"
         task["progress"] = 100
@@ -1087,3 +1097,38 @@ def get_test_result(job_id: str) -> dict:
     if task and task["status"] == "done":
         return task["result"]
     return None
+
+
+def load_file_for_preview(rel_path: str) -> dict:
+    """加载 .nde 文件返回 B-scan 和 A-scan 预览数据"""
+    full_path = os.path.normpath(os.path.join(BASE_DIR, rel_path))
+    # 安全检查：确保路径在 dataset 目录内
+    if not full_path.startswith(os.path.normpath(BASE_DIR)):
+        raise ValueError(f"无效的文件路径: {rel_path}")
+    if not os.path.exists(full_path):
+        raise FileNotFoundError(f"文件不存在: {rel_path}")
+
+    with h5py.File(full_path, 'r') as f:
+        ds_path = get_dataset_path(f)
+        if ds_path is None:
+            raise ValueError("文件中未找到数据张量")
+        data = f[ds_path][()]
+        data = np.squeeze(data)
+        if data.ndim != 2:
+            raise ValueError(f"数据维度不正确: {data.ndim}")
+
+        # 取标签
+        try:
+            raw = f["Private/GlobalLabel"][()]
+            label_obj = json.loads(raw.decode("utf-8"))
+            label = label_obj.get("defectType", "unknown")
+        except Exception:
+            label = "unknown"
+
+        return {
+            "bscan": data.tolist(),
+            "ascan": data[0].tolist(),
+            "shape": list(data.shape),
+            "label": label,
+            "filename": os.path.basename(rel_path),
+        }

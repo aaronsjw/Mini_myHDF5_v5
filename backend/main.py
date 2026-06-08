@@ -16,6 +16,7 @@ import re
 from trainer import (
     preview_dataset, start_train, get_status, get_result, list_models, delete_model,
     start_test, get_test_status, get_test_result,
+    load_file_for_preview,
 )
 
 
@@ -489,6 +490,18 @@ def test_result(job_id: str):
     if res is None:
         return {"error": "result not available yet"}
     return res
+
+
+@app.get("/test/file_preview")
+def test_file_preview(path: str):
+    """加载 .nde 文件的 B-scan / A-scan 数据"""
+    try:
+        data = load_file_for_preview(path)
+        return data
+    except (ValueError, FileNotFoundError) as e:
+        return {"error": str(e)}
+    except Exception as e:
+        return {"error": f"加载失败: {str(e)}"}
 
 
 @app.get("/dataset_overview")

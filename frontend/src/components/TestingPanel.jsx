@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react'
-import { Card, Button, Progress, Statistic, Row, Col, Table, Tag, Select, message, Spin, Empty } from 'antd'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
+import { Card, Button, Progress, Statistic, Row, Col, Table, Tag, Select, message, Spin, Empty, Drawer, Space, InputNumber, Slider } from 'antd'
+import { EyeOutlined } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import axios from 'axios'
 
@@ -30,6 +31,21 @@ export default function TestingPanel() {
 
   // 筛选
   const [filterErrors, setFilterErrors] = useState(false)
+
+  // 文件预览
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewFile, setPreviewFile] = useState(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState(null)
+  const [pFrameIndex, setPFrameIndex] = useState(0)
+  const [pPlaying, setPPlaying] = useState(false)
+  const [pPlaySpeed, setPPlaySpeed] = useState(100)
+  const [pColorMap, setPColorMap] = useState('Greys')
+  const [pXDim, setPXDim] = useState('D2')
+  const [pYDim, setPYDim] = useState('D0')
+  const [pReverseX, setPReverseX] = useState(false)
+  const [pReverseY, setPReverseY] = useState(false)
+  const pPlayTimer = useRef(null)
 
   const pollTimer = useRef(null)
 
@@ -152,17 +168,35 @@ export default function TestingPanel() {
     },
     {
       title: '置信度',
-      dataIndex: 'confidence',
       key: 'confidence',
       width: 100,
-      render: (v, record) => {
-        if (v == null) return '-'
+      render: (_, record) => {
+        const probs = record.probabilities
+        if (!probs) return '-'
         const clsIdx = result?.class_names?.indexOf(record.pred)
-        if (clsIdx >= 0 && v[clsIdx] != null) {
-          return (v[clsIdx] * 100).toFixed(1) + '%'
+        if (clsIdx >= 0 && probs[clsIdx] != null) {
+          const pct = probs[clsIdx] * 100
+          const color = pct > 90 ? '#52c41a' : pct > 70 ? '#faad14' : '#f5222d'
+          return <span style={{ color, fontWeight: 'bold' }}>{pct.toFixed(1)}%</span>
         }
         return '-'
       }
+    },
+    {
+      title: '操作',
+      key: 'action',
+      width: 70,
+      render: (_, record) => (
+        <Button
+          type="link"
+          size="small"
+          icon={<EyeOutlined />}
+          disabled={!record.file_path}
+          onClick={() => handlePreview(record.file_path)}
+        >
+          查看
+        </Button>
+      ),
     },
   ]
 
@@ -174,6 +208,149 @@ export default function TestingPanel() {
     : []
 
   const isRunning = ['pending', 'loading', 'testing'].includes(status)
+
+  // ═══ 文件预览 ═══
+  const handlePreview = async (filePath) => {
+    if (!filePath) return
+    setPreviewOpen(true)
+    setPreviewLoading(true)
+    setPreviewError(null)
+    setPreviewFile(null)
+    setPFrameIndex(0)
+    setPPlaying(false)
+    try {
+      const res = await axios.get('http://127.0.0.1:8000/test/file_preview', {
+        params: { path: filePath }
+      })
+      if (res.data.error) {
+        setPreviewError(res.data.error)
+      } else {
+        setPreviewFile(res.data)
+      }
+    } catch (err) {
+      setPreviewError('加载文件失败: ' + err.message)
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  // 关闭预览时清理播放
+  const closePreview = () => {
+    setPPlaying(false)
+    clearInterval(pPlayTimer.current)
+    setPreviewOpen(false)
+    setPreviewFile(null)
+    setPreviewError(null)
+  }
+
+  // 预览 A-Scan 自动播放
+  useEffect(() => {
+    if (!pPlaying || !previewFile) {
+      clearInterval(pPlayTimer.current)
+      return
+    }
+    pPlayTimer.current = setInterval(() => {
+      setPFrameIndex(prev => {
+        const next = prev + 1
+        if (next >= (previewFile.bscan?.length || 0)) {
+          setPPlaying(false)
+          return 0
+        }
+        return next
+      })
+    }, pPlaySpeed)
+    return () => clearInterval(pPlayTimer.current)
+  }, [pPlaying, previewFile, pPlaySpeed])
+
+  // 预览 Heatmap 轴选择
+  const handlePXDimChange = (value) => {
+    if (value === pYDim) {
+      const dims = ['D0', 'D1', 'D2']
+      const remain = dims.find(d => d !== value && d !== pXDim)
+      setPYDim(remain)
+    }
+    setPXDim(value)
+  }
+  const handlePYDimChange = (value) => {
+    if (value === pXDim) {
+      const dims = ['D0', 'D1', 'D2']
+      const remain = dims.find(d => d !== value && d !== pYDim)
+      setPXDim(remain)
+    }
+    setPYDim(value)
+  }
+
+  // 预览 Heatmap 颜色方案
+  const getPColorMapColors = () => {
+    switch (pColorMap) {
+      case 'Viridis': return ['#440154', '#3b528b', '#21918c', '#5dc863', '#fde725']
+      case 'Inferno': return ['#000004', '#420a68', '#932667', '#dd513a', '#fba40a', '#fcffa4']
+      case 'Turbo':   return ['#30123b', '#4145ab', '#4693ff', '#39d353', '#f9e721', '#ff6b00', '#7a0403']
+      case 'Plasma':  return ['#0d0887', '#7e03a8', '#cc4778', '#f89540', '#f0f921']
+      case 'Magma':   return ['#000004', '#3b0f70', '#8c2981', '#de4968', '#fe9f6d', '#fcfdbf']
+      default:        return ['#000000', '#555555', '#aaaaaa', '#ffffff']
+    }
+  }
+
+  // 预览 Heatmap 数据变换
+  const displayHeatmap = useMemo(() => {
+    if (!previewFile?.bscan) return null
+    let matrix = previewFile.bscan
+    if (pXDim === 'D0' && pYDim === 'D2') {
+      const rows = matrix.length
+      const cols = matrix[0].length
+      matrix = Array.from({ length: cols }, (_, x) =>
+        Array.from({ length: rows }, (_, y) => previewFile.bscan[y][x])
+      )
+    }
+    if (pReverseY) matrix = [...matrix].reverse()
+    if (pReverseX) matrix = matrix.map(row => [...row].reverse())
+    return matrix
+  }, [previewFile, pXDim, pYDim, pReverseX, pReverseY])
+
+  // 预览 B-scan 热力图 option
+  const bscanOption = displayHeatmap ? {
+    animation: false,
+    grid: { top: 10, bottom: 20, left: 60, right: 90, containLabel: true },
+    tooltip: { show: false },
+    visualMap: {
+      min: -2000,
+      max: 2000,
+      calculable: true,
+      orient: 'vertical',
+      right: 10,
+      top: 'middle',
+      itemHeight: 250,
+      itemWidth: 20,
+      inRange: { color: getPColorMapColors() }
+    },
+    xAxis: {
+      type: 'category',
+      data: displayHeatmap[0].map((_, i) => i).filter(i => i % 8 === 0)
+    },
+    yAxis: {
+      type: 'category',
+      data: displayHeatmap.map((_, i) => i)
+    },
+    series: [{
+      type: 'heatmap',
+      progressive: 5000,
+      data: displayHeatmap.flatMap((row, y) =>
+        row.filter((_, x) => x % 8 === 0).map((v, x) => [x, y, v])
+      )
+    }]
+  } : null
+
+  // 预览 A-scan 当前帧
+  const currentWave = previewFile?.bscan?.[pFrameIndex] || previewFile?.ascan || []
+
+  // 预览 A-scan 波形 option
+  const ascanOption = previewFile ? {
+    tooltip: {},
+    xAxis: { type: 'category', data: currentWave.map((_, i) => i) },
+    yAxis: { type: 'value', min: -2000, max: 2000 },
+    series: [{ type: 'line', smooth: true, data: currentWave }]
+  } : null
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto', paddingRight: 4 }}>
@@ -355,6 +532,112 @@ export default function TestingPanel() {
               </pre>
             </Card>
           )}
+
+          {/* ═══ 文件预览 Drawer ═══ */}
+          <Drawer
+            title={previewFile ? `文件预览: ${previewFile.filename}` : '文件预览'}
+            placement="right"
+            width={700}
+            open={previewOpen}
+            onClose={closePreview}
+          >
+            {previewLoading && <Spin size="large" style={{ display: 'block', margin: '40px auto' }} />}
+            {previewError && <div style={{ color: '#ff4d4f' }}>{previewError}</div>}
+            {previewFile && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {/* 文件信息 */}
+                <Card size="small">
+                  <Row gutter={16}>
+                    <Col>
+                      <Statistic title="文件名" value={previewFile.filename} valueStyle={{ fontSize: 14 }} />
+                    </Col>
+                    <Col>
+                      <Statistic
+                        title="标签"
+                        value={DEFECT_FULL_NAMES[previewFile.label] || previewFile.label}
+                        valueStyle={{ color: DEFECT_COLORS[previewFile.label] || '#fff', fontWeight: 'bold' }}
+                      />
+                    </Col>
+                    <Col>
+                      <Statistic title="数据形状" value={`${previewFile.shape?.[0] || '-'} × ${previewFile.shape?.[1] || '-'}`} valueStyle={{ fontSize: 14 }} />
+                    </Col>
+                  </Row>
+                </Card>
+
+                {/* A-Scan — 匹配 AScanViewer */}
+                {previewFile.bscan && previewFile.bscan.length > 0 && (
+                  <Card size="small" title={`A-Scan Frame ${pFrameIndex}`} bodyStyle={{ padding: 4 }}>
+                    <Slider
+                      min={0}
+                      max={previewFile.bscan.length - 1}
+                      value={pFrameIndex}
+                      onChange={v => {
+                        setPFrameIndex(v)
+                      }}
+                    />
+                    <div style={{ display: 'flex', gap: 10, marginTop: 12, alignItems: 'center', marginLeft: 4 }}>
+                      <Button onClick={() => setPFrameIndex(prev => Math.max(prev - 1, 0))}>Prev</Button>
+                      <Button type="primary" onClick={() => setPPlaying(true)} disabled={pPlaying}>▶ Play</Button>
+                      <Button danger onClick={() => setPPlaying(false)} disabled={!pPlaying}>■ Stop</Button>
+                      <Button onClick={() => setPFrameIndex(prev => Math.min(prev + 1, previewFile.bscan.length - 1))}>Next</Button>
+                      <Tag color="blue">{pFrameIndex + 1}/{previewFile.bscan.length}</Tag>
+                      <InputNumber
+                        min={20} max={1000}
+                        value={pPlaySpeed}
+                        onChange={v => setPPlaySpeed(v || 100)}
+                        addonAfter="ms"
+                        size="small"
+                        style={{ width: 110 }}
+                      />
+                    </div>
+                  </Card>
+                )}
+
+                {/* A-Scan 波形 */}
+                <Card size="small" title="A-Scan Waveform" bodyStyle={{ padding: 4 }}>
+                  <ReactECharts option={ascanOption} style={{ height: 400 }} />
+                </Card>
+
+                {/* B-Scan 热力图 — 匹配 HeatmapViewer */}
+                <Card
+                  size="small"
+                  title="B-Scan Heatmap"
+                  extra={
+                    <Select
+                      value={pColorMap}
+                      style={{ width: 140 }}
+                      onChange={setPColorMap}
+                      options={[
+                        { value: 'Greys', label: 'Greys' },
+                        { value: 'Viridis', label: 'Viridis' },
+                        { value: 'Inferno', label: 'Inferno' },
+                        { value: 'Turbo', label: 'Turbo' },
+                        { value: 'Plasma', label: 'Plasma' },
+                        { value: 'Magma', label: 'Magma' }
+                      ]}
+                    />
+                  }
+                  bodyStyle={{ padding: 4 }}
+                >
+                  <Space wrap style={{ marginBottom: 12, marginLeft: 4 }}>
+                    <span>X:</span>
+                    <Button size="small" type={pXDim === 'D0' ? 'primary' : 'default'} onClick={() => handlePXDimChange('D0')}>D0</Button>
+                    <Button size="small" type={pXDim === 'D1' ? 'primary' : 'default'} onClick={() => handlePXDimChange('D1')}>D1</Button>
+                    <Button size="small" type={pXDim === 'D2' ? 'primary' : 'default'} onClick={() => handlePXDimChange('D2')}>D2</Button>
+                    <Button size="small" type={pReverseX ? 'primary' : 'default'} onClick={() => setPReverseX(!pReverseX)}>Reverse X</Button>
+                    <span style={{ marginLeft: 20 }}>Y:</span>
+                    <Button size="small" type={pYDim === 'D0' ? 'primary' : 'default'} onClick={() => handlePYDimChange('D0')}>D0</Button>
+                    <Button size="small" type={pYDim === 'D1' ? 'primary' : 'default'} onClick={() => handlePYDimChange('D1')}>D1</Button>
+                    <Button size="small" type={pYDim === 'D2' ? 'primary' : 'default'} onClick={() => handlePYDimChange('D2')}>D2</Button>
+                    <Button size="small" type={pReverseY ? 'primary' : 'default'} onClick={() => setPReverseY(!pReverseY)}>Reverse Y</Button>
+                  </Space>
+                  {bscanOption && (
+                    <ReactECharts option={bscanOption} style={{ height: 350 }} />
+                  )}
+                </Card>
+              </div>
+            )}
+          </Drawer>
         </>
       )}
     </div>
