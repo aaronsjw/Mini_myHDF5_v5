@@ -8,6 +8,7 @@ import InspectPancel from './components/InspectPanel'
 import DatabaseOverview from './components/DatabaseOverview'
 import TrainingPanel from './components/TrainingPanel'
 import TestingPanel from './components/TestingPanel'
+import EvaluationPanel from './components/EvaluationPanel'
 
 import {
     Layout,
@@ -321,8 +322,8 @@ export default function App() {
                                     key: 'analysis',
                                     label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>智能评估</span>,
                                     children: (
-                                        <div style={{ padding: '6px 12px', color: '#666', fontSize: 13, background: '#666', borderRadius: 6 }}>
-                                            (Coming soon)
+                                        <div style={{ padding: '6px 12px', color: '#999', fontSize: 12, background: '#666', borderRadius: 6 }}>
+                                            上传 .nde 文件，用 AI 分析缺陷类型
                                         </div>
                                     )
                                 }
@@ -358,6 +359,9 @@ export default function App() {
                 </div>
                 <div style={{ height: '100%', overflow: 'auto', display: activeModule === 'test' ? 'block' : 'none' }}>
                     <TestingPanel />
+                </div>
+                <div style={{ height: '100%', display: activeModule === 'analysis' ? 'block' : 'none' }}>
+                    <EvaluationPanel />
                 </div>
                 <div style={{ height: '100%', display: activeModule === 'labeling' ? 'block' : 'none' }}>
                     {info && (

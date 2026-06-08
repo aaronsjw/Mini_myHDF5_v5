@@ -17,6 +17,7 @@ from trainer import (
     preview_dataset, start_train, get_status, get_result, list_models, delete_model,
     start_test, get_test_status, get_test_result,
     load_file_for_preview,
+    generate_inspection_report,
 )
 
 
@@ -502,6 +503,43 @@ def test_file_preview(path: str):
         return {"error": str(e)}
     except Exception as e:
         return {"error": f"加载失败: {str(e)}"}
+
+
+@app.post("/chat/report")
+def chat_report(req: dict):
+    """生成并下载检测报告"""
+    try:
+        report_path, report_id = generate_inspection_report(
+            filename=req.get("filename", "unknown.nde"),
+            meta=req.get("meta", {}),
+            signal_analysis=req.get("signal_analysis", ""),
+            defect_result=req.get("defect_result", ""),
+            confidence=req.get("confidence", 0),
+            model_name=req.get("model_name", ""),
+        )
+        return {
+            "success": True,
+            "report_id": report_id,
+            "download_url": f"/chat/report/download/{report_id}",
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/chat/report/download/{report_id}")
+def chat_report_download(report_id: str):
+    """下载检测报告"""
+    import glob as gglob
+    report_dir = os.path.join(os.path.dirname(__file__), "reports")
+    pattern = os.path.join(report_dir, f"{report_id}.docx")
+    matches = gglob.glob(pattern)
+    if not matches:
+        return {"error": "报告文件不存在"}
+    return FileResponse(
+        path=matches[0],
+        filename=f"检测报告_{report_id}.docx",
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
 
 
 @app.get("/dataset_overview")

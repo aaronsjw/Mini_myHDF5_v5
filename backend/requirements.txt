@@ -6,3 +6,5 @@ pandas
 python-multipart
 scikit-learn
 joblib
+python-docx
+lxml

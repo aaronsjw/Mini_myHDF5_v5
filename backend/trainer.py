@@ -1132,3 +1132,114 @@ def load_file_for_preview(rel_path: str) -> dict:
             "label": label,
             "filename": os.path.basename(rel_path),
         }
+
+
+REPORT_DIR = os.path.join(os.path.dirname(__file__), "reports")
+os.makedirs(REPORT_DIR, exist_ok=True)
+
+
+def generate_inspection_report(
+    filename: str,
+    meta: dict,
+    signal_analysis: str,
+    defect_result: str,
+    confidence: float,
+    model_name: str = "",
+) -> str:
+    """
+    生成 Word 格式的超声检测分析报告。
+    返回报告文件的路径。
+    """
+    from docx import Document
+    from docx.shared import Pt, Inches, Cm, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+
+    report_id = f"JC-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    basename = os.path.splitext(os.path.basename(filename))[0]
+
+    doc = Document()
+
+    # ── 全局样式 ──
+    style = doc.styles['Normal']
+    style.font.name = '宋体'
+    style.font.size = Pt(11)
+    style.paragraph_format.line_spacing = 1.5
+
+    # ═══ 标题 ═══
+    title = doc.add_heading('复合材料超声检测分析报告', level=0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    for run in title.runs:
+        run.font.color.rgb = RGBColor(0, 0, 0)
+
+    # ═══ 报告信息 ═══
+    doc.add_paragraph('')  # 空行
+    info_table = doc.add_table(rows=4, cols=4)
+    info_table.style = 'Table Grid'
+    info_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+    info_data = [
+        ['报告编号', report_id, '检测日期', datetime.now().strftime('%Y-%m-%d')],
+        ['文件名称', basename, '检测方法', meta.get('method', '-')],
+        ['纤维类型', meta.get('fiber', '-'), '基体类型', meta.get('matrix', '-')],
+        ['结构类型', meta.get('structure', '-'), '评估模型', model_name],
+    ]
+    for i, row_data in enumerate(info_data):
+        for j, val in enumerate(row_data):
+            cell = info_table.cell(i, j)
+            cell.text = val
+            for paragraph in cell.paragraphs:
+                paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                for run in paragraph.runs:
+                    run.font.size = Pt(10)
+                    if j % 2 == 0:  # 标签列加粗
+                        run.font.bold = True
+
+    doc.add_paragraph('')
+
+    # ═══ 信号分析 ═══
+    doc.add_heading('一、信号分析结果', level=1)
+    for line in signal_analysis.strip().split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        # 处理 Markdown 格式
+        if line.startswith('- '):
+            p = doc.add_paragraph(line[2:], style='List Bullet')
+        elif line.startswith('**') and line.endswith('**'):
+            p = doc.add_paragraph(line.strip('*'))
+            for run in p.runs:
+                run.font.bold = True
+                run.font.size = Pt(11)
+        else:
+            doc.add_paragraph(line)
+
+    # ═══ 检测结论 ═══
+    doc.add_heading('二、检测结论', level=1)
+    conclusion_p = doc.add_paragraph()
+    if defect_result:
+        run = conclusion_p.add_run(f'缺陷类型：{defect_result}')
+        run.font.bold = True
+        run.font.size = Pt(12)
+        doc.add_paragraph(f'置信度：{confidence:.1f}%')
+    else:
+        conclusion_p.add_run('未检测到明显缺陷信号，判定为正常区域（OK）。')
+
+    # ═══ 建议 ═══
+    doc.add_heading('三、建议', level=1)
+    if defect_result and defect_result != 'OK':
+        doc.add_paragraph('1. 建议对该区域进行补充扫描，确认缺陷范围。')
+        doc.add_paragraph('2. 建议结合其它无损检测方法（如超声相控阵、X射线）进行交叉验证。')
+        doc.add_paragraph('3. 如确认缺陷，建议评估其对结构完整性的影响。')
+    else:
+        doc.add_paragraph('1. 当前检测点信号正常，未发现明显异常。')
+        doc.add_paragraph('2. 建议按计划继续进行后续检测。')
+
+    # ═══ 声明 ═══
+    doc.add_paragraph('')
+    doc.add_paragraph('声明：本报告由复合材料智能评估系统自动生成，仅供技术参考。').alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    # ── 保存 ──
+    report_path = os.path.join(REPORT_DIR, f"{report_id}.docx")
+    doc.save(report_path)
+    return report_path, report_id
