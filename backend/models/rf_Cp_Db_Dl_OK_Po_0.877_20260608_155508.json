@@ -1,0 +1,110 @@
+{
+  "model_type": "random_forest",
+  "accuracy": 0.8766404199475065,
+  "test_size": 0.2,
+  "n_estimators": 100,
+  "max_depth": null,
+  "n_samples": 1902,
+  "n_features": 398,
+  "class_names": [
+    "Cp",
+    "Db",
+    "Dl",
+    "OK",
+    "Po"
+  ],
+  "classification_report": {
+    "Cp": {
+      "precision": 0.9864864864864865,
+      "recall": 0.9012345679012346,
+      "f1-score": 0.9419354838709677,
+      "support": 81.0
+    },
+    "Db": {
+      "precision": 0.9855072463768116,
+      "recall": 0.9066666666666666,
+      "f1-score": 0.9444444444444444,
+      "support": 75.0
+    },
+    "Dl": {
+      "precision": 0.8533333333333334,
+      "recall": 0.8888888888888888,
+      "f1-score": 0.8707482993197279,
+      "support": 72.0
+    },
+    "OK": {
+      "precision": 0.75,
+      "recall": 0.8910891089108911,
+      "f1-score": 0.8144796380090498,
+      "support": 101.0
+    },
+    "Po": {
+      "precision": 0.9069767441860465,
+      "recall": 0.75,
+      "f1-score": 0.8210526315789474,
+      "support": 52.0
+    },
+    "accuracy": 0.8766404199475065,
+    "macro avg": {
+      "precision": 0.8964607620765357,
+      "recall": 0.8675758464735364,
+      "f1-score": 0.8785320994446273,
+      "support": 381.0
+    },
+    "weighted avg": {
+      "precision": 0.887588555331603,
+      "recall": 0.8766404199475065,
+      "f1-score": 0.8786907227268279,
+      "support": 381.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      73,
+      0,
+      3,
+      2,
+      3
+    ],
+    [
+      0,
+      68,
+      0,
+      7,
+      0
+    ],
+    [
+      0,
+      0,
+      64,
+      8,
+      0
+    ],
+    [
+      1,
+      1,
+      8,
+      90,
+      1
+    ],
+    [
+      0,
+      0,
+      0,
+      13,
+      39
+    ]
+  ],
+  "confusion_matrix_labels": [
+    "Cp",
+    "Db",
+    "Dl",
+    "OK",
+    "Po"
+  ],
+  "use_metadata": true,
+  "n_features_meta": 8,
+  "model_name": "rf_Cp_Db_Dl_OK_Po_0.877_20260608_155508",
+  "model_file": "rf_Cp_Db_Dl_OK_Po_0.877_20260608_155508.pkl",
+  "saved_at": "20260608_155508"
+}

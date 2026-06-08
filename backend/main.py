@@ -11,6 +11,12 @@ import pandas as pd
 import shutil
 import glob
 import zipfile
+import re
+
+from trainer import (
+    preview_dataset, start_train, get_status, get_result, list_models, delete_model,
+    start_test, get_test_status, get_test_result,
+)
 
 
 app = FastAPI()
@@ -416,6 +422,73 @@ async def batch_save_defect_type(
                 z.write(full_path, arcname)
 
     return FileResponse(output_zip, filename=f"batch_{defectType}.zip", media_type="application/zip")
+
+
+# ══════════════════════════════════════════════════
+# 模型训练 API
+# ══════════════════════════════════════════════════
+
+@app.get("/train/preview")
+def train_preview():
+    return preview_dataset()
+
+
+@app.post("/train/start")
+def train_start(req: dict):
+    job_id = start_train(req)
+    return {"job_id": job_id, "status": "pending"}
+
+
+@app.get("/train/status/{job_id}")
+def train_status(job_id: str):
+    return get_status(job_id)
+
+
+@app.get("/train/result/{job_id}")
+def train_result(job_id: str):
+    res = get_result(job_id)
+    if res is None:
+        return {"error": "result not available yet"}
+    return res
+
+
+@app.get("/train/models")
+def train_models():
+    return {"models": list_models()}
+
+
+@app.delete("/train/models/{model_name}")
+def train_delete_model(model_name: str):
+    delete_model(model_name)
+    return {"success": True}
+
+
+# ══════════════════════════════════════════════════
+# 模型测试 API
+# ══════════════════════════════════════════════════
+
+@app.get("/test/models")
+def test_models():
+    return {"models": list_models()}
+
+
+@app.post("/test/start")
+def test_start(req: dict):
+    job_id = start_test(req)
+    return {"job_id": job_id, "status": "pending"}
+
+
+@app.get("/test/status/{job_id}")
+def test_status(job_id: str):
+    return get_test_status(job_id)
+
+
+@app.get("/test/result/{job_id}")
+def test_result(job_id: str):
+    res = get_test_result(job_id)
+    if res is None:
+        return {"error": "result not available yet"}
+    return res
 
 
 @app.get("/dataset_overview")

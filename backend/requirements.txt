@@ -1,7 +1,8 @@
-
 fastapi
 uvicorn
 h5py
 numpy
 pandas
 python-multipart
+scikit-learn
+joblib

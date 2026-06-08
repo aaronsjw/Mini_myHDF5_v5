@@ -58,7 +58,7 @@ export default function DatabaseOverview() {
 
   // 文件详情列
   const fileColumns = [
-    { title: '文件名', dataIndex: 'filename', key: 'filename', width: 420, ellipsis: true },
+    { title: '文件名', dataIndex: 'filename', key: 'filename', width: 320, ellipsis: true },
     { title: '纤维类型', dataIndex: 'fiber', key: 'fiber', width: 80 },
     { title: '基体类型', dataIndex: 'matrix', key: 'matrix', width: 80 },
     { title: '结构', dataIndex: 'structure', key: 'structure', width: 100 },
@@ -67,7 +67,7 @@ export default function DatabaseOverview() {
       title: '缺陷类型',
       dataIndex: 'defect',
       key: 'defect',
-      width: 130,
+      width: 100,
       render: d => {
         const info = DEFECT_LABELS[d] || { color: 'default', text: d }
         return <Tag color={info.color}>{d}</Tag>
@@ -116,15 +116,14 @@ export default function DatabaseOverview() {
       <Card
         title="文件列表"
         size="small"
-        style={{ flex: 1, overflow: 'hidden' }}
-        bodyStyle={{ overflow: 'auto', padding: 8 }}
+        style={{ flex: 1, overflow: 'auto' }}
+        bodyStyle={{ padding: 8 }}
       >
         <Table
           columns={fileColumns}
           dataSource={data.files.map((f, i) => ({ ...f, key: i }))}
           size="small"
-          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 个文件` }}
-          scroll={{ y: 400 }}
+          pagination={{ pageSize: 5, showSizeChanger: true, showTotal: t => `共 ${t} 个文件`, pageSizeOptions: ['5', '10', '20', '50'] }}
         />
       </Card>
     </div>

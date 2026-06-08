@@ -98,16 +98,38 @@ DATASET_DIR = r"./dataset/TODO"     # 要修改的目录
 # DEFECTTYPE = "Cp"                   # 缺陷类型，标签
 
 
-# 7.ZT9H/1316，厚8.6mm，碳纤维/高温环氧
-FIBER = "CF"
-FIBER_GRADE = "ZT9H"
+# # 7.ZT9H/1316，厚8.6mm，碳纤维/高温环氧
+# FIBER = "CF"
+# FIBER_GRADE = "ZT9H"
+# MATRIX = "EP"
+# MATRIX_GRADE = "1316"
+# METHOD = "WRUT"
+# STRUCTURE = "Plate"
+# DESCRIPTION = "厚8.6mm，碳纤维/高温环氧，黑色"   # 改这里
+# CODE = "Z109"                       # 改这里
+# DEFECTTYPE = "Cp"                   # 缺陷类型，标签
+
+# # 8.QW280/AC319 3mm, QW280是石英织物，AC319是中温环氧。
+# FIBER = "GF"
+# FIBER_GRADE = "QW280"
+# MATRIX = "EP"
+# MATRIX_GRADE = "AC319"
+# METHOD = "WRUT"
+# STRUCTURE = "Plate"
+# DESCRIPTION = "QW280/AC319 3mm, QW280是石英织物，AC319是中温环氧, 白色,0.3MPa"   # 改这里
+# CODE = "Z109"                       # 改这里
+# DEFECTTYPE = "OK"                   # 缺陷类型，标签
+
+# 9.红色孔隙4块，QW120/1316,玻纤高温环氧 2mm，0.3MPa, 0.2MPa, 0.1MPa, -0.095MPa
+FIBER = "GF"
+FIBER_GRADE = "QW120"
 MATRIX = "EP"
 MATRIX_GRADE = "1316"
 METHOD = "WRUT"
 STRUCTURE = "Plate"
-DESCRIPTION = "厚8.6mm，碳纤维/高温环氧，黑色"   # 改这里
+DESCRIPTION = "9#红色孔隙4块，QW120/1316 玻纤高温环氧 2mm，0.3MPa, 0.2MPa, 0.1MPa, =-0.095MPa"   # 改这里
 CODE = "Z109"                       # 改这里
-DEFECTTYPE = "Cp"                   # 缺陷类型，标签
+DEFECTTYPE = "Po"                   # 缺陷类型，标签
 
 
 

@@ -6,6 +6,8 @@ import AScanViewer from './components/AScanViewer'
 import MatrixViewer from './components/MatrixViewer'
 import InspectPancel from './components/InspectPanel'
 import DatabaseOverview from './components/DatabaseOverview'
+import TrainingPanel from './components/TrainingPanel'
+import TestingPanel from './components/TestingPanel'
 
 import {
     Layout,
@@ -310,8 +312,8 @@ export default function App() {
                                     key: 'test',
                                     label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>模型测试</span>,
                                     children: (
-                                        <div style={{ padding: '6px 12px', color: '#666', fontSize: 13, background: '#666', borderRadius: 6 }}>
-                                            (Coming soon)
+                                        <div style={{ padding: '6px 12px', color: '#999', fontSize: 12, background: '#666', borderRadius: 6 }}>
+                                            在测试数据集上评估模型
                                         </div>
                                     )
                                 },
@@ -346,104 +348,97 @@ export default function App() {
 
 
             {/* RIGHT CONTENT */}
-            <Content style={{ padding: 20, overflow: 'hidden', background: '#f5f5f5' }}>
-                {activeModule === 'dataset' ? (
-                    <div style={{ height: '100%', overflow: 'auto' }}>
-                        <DatabaseOverview />
-                    </div>
-                ) : activeModule === 'labeling' && info ? (
-                    <Tabs
-                        defaultActiveKey="display"
-                        tabBarStyle={{ color: '#fff', background: '#fff', padding: '8px 12px', borderRadius: '8px' }}
-                        
-                        items={[
-                            {
-                                key: 'inspect',
-                                label: 'Inspect',
-                                children: (
-                                    <InspectPancel
-                                        info={info}
-                                        editableJson={editableJson}
-                                        handleJsonEdit={handleJsonEdit}
-                                        saveAsJson={saveAsJson}
-                                        currentPath={currentPath}
-                                    />
-                                )
-                            },
+            <Content style={{ padding: 20, overflow: 'hidden', background: '#f5f5f5', position: 'relative' }}>
+                {/* 用 display:none 替代条件渲染，防止组件卸载导致状态丢失 */}
+                <div style={{ height: '100%', overflow: 'auto', display: activeModule === 'model' ? 'block' : 'none' }}>
+                    <TrainingPanel />
+                </div>
+                <div style={{ height: '100%', overflow: 'auto', display: activeModule === 'dataset' ? 'block' : 'none' }}>
+                    <DatabaseOverview />
+                </div>
+                <div style={{ height: '100%', overflow: 'auto', display: activeModule === 'test' ? 'block' : 'none' }}>
+                    <TestingPanel />
+                </div>
+                <div style={{ height: '100%', display: activeModule === 'labeling' ? 'block' : 'none' }}>
+                    {info && (
+                        <Tabs
+                            defaultActiveKey="display"
+                            tabBarStyle={{ color: '#fff', background: '#fff', padding: '8px 12px', borderRadius: '8px' }}
 
-                            ...(info &&
-                            ['waveform', 'nde_tensor'].includes(info.type)
-                                ? [{
-                                    key: 'display',
-                                    label: (
-                                        <span>
-                                            Display
-                                            {!(
-                                                info &&
-                                                ['waveform', 'nde_tensor'].includes(info.type)
-                                            ) && ' 🔒'}
-                                        </span>
-                                    ),
-                                        disabled: !(
-                                            info &&
-                                            ['waveform', 'nde_tensor'].includes(info.type)
-                                        ),
+                            items={[
+                                {
+                                    key: 'inspect',
+                                    label: 'Inspect',
                                     children: (
-                                        <Tabs
-                                            defaultActiveKey="heatmap"
-                                            items={[
-                                                {
-                                                    key: 'matrix',
-                                                    label: 'Matrix',
-                                                    children: (
-                                                        <MatrixViewer frames={frames} />
-                                                    )
-                                                },
-                                                {
-                                                    key: 'ascan',
-                                                    label: 'A-Scan',
-                                                    children: (
-                                                        <AScanViewer
-                                                            frames={frames}
-                                                            wave={wave}
-                                                            frameIndex={frameIndex}
-                                                            setFrameIndex={setFrameIndex}
-                                                            setWave={setWave}
-                                                            playing={playing}
-                                                            setPlaying={setPlaying}
-                                                            playSpeed={playSpeed}
-                                                            setPlaySpeed={setPlaySpeed}
-                                                        />
-                                                    )
-                                                },
-                                                {
-                                                    key: 'heatmap',
-                                                    label: 'Heatmap',
-                                                    children: (
-                                                        <HeatmapViewer
-                                                            heatmap={heatmap}
-                                                            colorMap={colorMap}
-                                                            setColorMap={setColorMap}
-                                                            heatmapHeight={heatmapHeight}
-                                                            xDim={xDim}
-                                                            setXDim={setXDim}
-                                                            yDim={yDim}
-                                                            setYDim={setYDim}
-                                                            reverseX={reverseX}
-                                                            setReverseX={setReverseX}
-                                                            reverseY={reverseY}
-                                                            setReverseY={setReverseY}
-                                                        />
-                                                    )
-                                                }
-                                            ]}
+                                        <InspectPancel
+                                            info={info}
+                                            editableJson={editableJson}
+                                            handleJsonEdit={handleJsonEdit}
+                                            saveAsJson={saveAsJson}
+                                            currentPath={currentPath}
                                         />
                                     )
-                                }]
-                                : [])
-                        ]}
-                    />
-                ) : null}
+                                },
+
+                                ...(['waveform', 'nde_tensor'].includes(info.type)
+                                    ? [{
+                                        key: 'display',
+                                        label: 'Display',
+                                        children: (
+                                            <Tabs
+                                                defaultActiveKey="heatmap"
+                                                items={[
+                                                    {
+                                                        key: 'matrix',
+                                                        label: 'Matrix',
+                                                        children: <MatrixViewer frames={frames} />
+                                                    },
+                                                    {
+                                                        key: 'ascan',
+                                                        label: 'A-Scan',
+                                                        children: (
+                                                            <AScanViewer
+                                                                frames={frames}
+                                                                wave={wave}
+                                                                frameIndex={frameIndex}
+                                                                setFrameIndex={setFrameIndex}
+                                                                setWave={setWave}
+                                                                playing={playing}
+                                                                setPlaying={setPlaying}
+                                                                playSpeed={playSpeed}
+                                                                setPlaySpeed={setPlaySpeed}
+                                                            />
+                                                        )
+                                                    },
+                                                    {
+                                                        key: 'heatmap',
+                                                        label: 'Heatmap',
+                                                        children: (
+                                                            <HeatmapViewer
+                                                                heatmap={heatmap}
+                                                                colorMap={colorMap}
+                                                                setColorMap={setColorMap}
+                                                                heatmapHeight={heatmapHeight}
+                                                                xDim={xDim}
+                                                                setXDim={setXDim}
+                                                                yDim={yDim}
+                                                                setYDim={setYDim}
+                                                                reverseX={reverseX}
+                                                                setReverseX={setReverseX}
+                                                                reverseY={reverseY}
+                                                                setReverseY={setReverseY}
+                                                            />
+                                                        )
+                                                    }
+                                                ]}
+                                            />
+                                        )
+                                    }]
+                                    : [])
+                            ]}
+                        />
+                    )}
+                </div>
             </Content>
         </Layout>
     )
