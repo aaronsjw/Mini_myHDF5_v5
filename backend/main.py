@@ -1,6 +1,6 @@
 
 from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import tempfile
 import os
@@ -18,7 +18,10 @@ from trainer import (
     start_test, get_test_status, get_test_result,
     load_file_for_preview,
     generate_inspection_report,
+    predict_single_file,
 )
+from signal_analysis import analyze_signal, load_nde_meta
+from deepseek_client import chat_stream
 
 
 app = FastAPI()
@@ -63,7 +66,7 @@ async def upload(file: UploadFile = File(...)):
 
     current_filename = file.filename
 
-    return {"message": "uploaded"}
+    return {"message": "uploaded", "file_path": current_file, "filename": current_filename}
 
 def build_tree(group, path="/"):
 
@@ -540,6 +543,178 @@ def chat_report_download(report_id: str):
         filename=f"检测报告_{report_id}.docx",
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
+
+
+@app.get("/chat/current_file")
+def chat_current_file():
+    """返回当前上传的文件信息"""
+    global current_file, current_filename
+    if current_file and os.path.exists(current_file):
+        # 读取部分元数据
+        meta = load_nde_meta(current_file)
+        # 从文件名解析基本参数
+        parts = []
+        if current_filename:
+            parts = current_filename.replace(".nde", "").split("_")
+        return {
+            "file_path": current_file,
+            "filename": current_filename,
+            "meta": {
+                "fiber": parts[0] if len(parts) > 0 else "-",
+                "matrix": parts[1] if len(parts) > 1 else "-",
+                "structure": parts[2] if len(parts) > 2 else "-",
+                "method": parts[3] if len(parts) > 3 else "-",
+                "defectType": parts[4] if len(parts) > 4 else "-",
+            },
+            "nde_meta": meta,
+        }
+    return {"file_path": None, "filename": None, "meta": None}
+
+
+@app.post("/chat/ask")
+async def chat_ask(req: dict):
+    """智能评估对话接口（SSE 流式）"""
+    question = req.get("question", "").strip()
+    model_name = req.get("model_name", "")
+
+    # 如果没有问题，返回空
+    if not question:
+        async def empty_gen():
+            yield "\n__DONE__"
+        return StreamingResponse(empty_gen(), media_type="text/plain")
+
+    # 确定是否有上传文件
+    has_file = current_file is not None and os.path.exists(current_file)
+
+    if has_file:
+        # ── 有文件：读取信号 + 模型预测 ──
+        try:
+            signal = analyze_signal(current_file)
+            meta = load_nde_meta(current_file)
+        except Exception as e:
+            signal = None
+            meta = {}
+
+        # 模型预测
+        prediction = None
+        if model_name:
+            try:
+                prediction = predict_single_file(current_file, model_name)
+            except Exception as e:
+                prediction = {"error": str(e)}
+        else:
+            # 自动选最好模型
+            models = list_models()
+            if models:
+                best = models[0]
+                model_name = best["model_name"]
+                try:
+                    prediction = predict_single_file(current_file, model_name)
+                except Exception as e:
+                    prediction = {"error": str(e)}
+
+        # ── 提取元数据文本 ──
+        meta_lines = []
+        if meta:
+            gl = meta.get("GlobalLabel", {})
+            mi = meta.get("MaterialInfo", {})
+            di = meta.get("DetectionInfo", {})
+
+            if gl.get("structure"): meta_lines.append(f"- 结构类型：{gl['structure']}")
+            if mi.get("fiber"): meta_lines.append(f"- 纤维类型：{mi['fiber']}")
+            if mi.get("fiberGrade"): meta_lines.append(f"- 纤维牌号：{mi['fiberGrade']}")
+            if mi.get("matrixGrade"): meta_lines.append(f"- 基体牌号：{mi['matrixGrade']}")
+            if di.get("probeFreq"): meta_lines.append(f"- 探头频率：{di['probeFreq']} MHz")
+            if di.get("samplingFreq"): meta_lines.append(f"- 采样频率：{di['samplingFreq']} MHz")
+
+        # ── 信号特征文本 ──
+        signal_lines = []
+        if signal:
+            signal_lines.append(f"- 幅值范围：[{signal['amp_range'][0]}, {signal['amp_range'][1]}]")
+            signal_lines.append(f"- 信号能量：{signal['energy']}")
+            signal_lines.append(f"- 信噪比（SNR）：{signal['snr_db']} dB")
+            signal_lines.append(f"- 平均幅值：{signal['mean_amplitude']}")
+            signal_lines.append(f"- 幅值标准差：{signal['std_amplitude']}")
+            signal_lines.append(f"- 回波峰值位置：采样点 {signal['peak_location']}")
+            signal_lines.append(f"- 底波能量比：{signal['backwall_ratio']}")
+            signal_lines.append(f"- 衰减系数：{signal['attenuation']}")
+            signal_lines.append(f"- 异常区域：{signal['abnormal_zone_desc']}")
+
+        # ── 预测结果文本 ──
+        pred_lines = []
+        if prediction and "error" not in prediction:
+            pred_lines.append(f"- Top-1 预测：{prediction['prediction']}")
+            pred_lines.append(f"- 置信度：{prediction['confidence']:.1%}")
+            pred_lines.append(f"- Top-3：{', '.join(prediction['top3'])}")
+
+            # 各类别概率详情
+            prob_details = "、".join([
+                f"{k}={v:.1%}" for k, v in sorted(
+                    prediction['probabilities'].items(),
+                    key=lambda x: x[1], reverse=True
+                )
+            ])
+            pred_lines.append(f"- 各类别概率：{prob_details}")
+            pred_lines.append(f"- 使用模型：{prediction['model_name']}")
+
+        # ── 构造 system prompt ──
+        system_prompt = f"""你是一个复合材料超声检测（NDE）智能评估专家。你的任务是根据提供的 .nde 文件信号特征和模型预测结果，综合分析是否存在缺陷以及缺陷类型。
+
+## 材料与检测参数
+{chr(10).join(meta_lines) if meta_lines else "- 未获取到详细参数"}
+
+## 信号特征
+{chr(10).join(signal_lines) if signal_lines else "- 信号分析未完成"}
+
+## 模型预测输出
+{chr(10).join(pred_lines) if pred_lines else "- 无可用模型预测结果"}
+"""
+
+        if prediction and "error" not in prediction and prediction['confidence'] > 0.6:
+            system_prompt += f"""
+## 分析规则
+1. 依据上述信号特征和模型输出来分析，给出详细结论
+2. **不要直接说出"模型预测为X类"**，而是说"信号特征与X类缺陷模式高度吻合"
+3. 必须从信号层面解释：回波特征、幅值变化、底波衰减、异常区域等
+4. 分析要详细、专业，涵盖材料参数、信号特征、缺陷判断、置信度评估
+5. 用中文回复，适当使用 Markdown 格式（标题、加粗、列表、引用等）
+6. 如果置信度低于60%，要提示"需要进一步确认"
+7. 回复末尾加上 "> 如需生成检测报告，请告诉我。" """
+        else:
+            system_prompt += f"""
+## 分析规则
+1. 依据上述信号特征进行分析，给出初步结论
+2. 坦诚告知模型预测置信度不足，建议进一步检测
+3. 用中文回复，适当使用 Markdown 格式
+4. 回复末尾加上 "> 如需生成检测报告，请告诉我。" """
+
+    else:
+        # ── 无文件：通用助手指令 ──
+        system_prompt = """你是一个复合材料超声检测（NDE）智能评估助手。你可以：
+1. 介绍复合材料超声检测的相关知识
+2. 解释常见的缺陷类型（分层、脱粘、气孔、夹杂等）
+3. 回答关于 NDE 检测工艺的问题
+4. 引导用户上传 .nde 文件进行具体分析
+
+请用中文回复，适当使用 Markdown 格式。如果用户询问具体文件分析，请提醒用户上传 .nde 文件。"""
+
+    # ── 调用 DeepSeek API 流式返回 ──
+    messages = [{"role": "user", "content": question}]
+
+    async def text_generator():
+        try:
+            async for text in chat_stream(
+                messages=messages,
+                system_prompt=system_prompt,
+            ):
+                if text:
+                    yield text
+            yield "\n__DONE__"
+        except Exception as e:
+            yield f"\n\n⚠️ 处理出错: {str(e)}"
+            yield "\n__DONE__"
+
+    return StreamingResponse(text_generator(), media_type="text/plain")
 
 
 @app.get("/dataset_overview")

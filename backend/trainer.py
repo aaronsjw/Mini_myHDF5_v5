@@ -1134,6 +1134,112 @@ def load_file_for_preview(rel_path: str) -> dict:
         }
 
 
+def predict_single_file(file_path: str, model_name: str) -> dict:
+    """
+    对单个 .nde 文件进行预测。
+
+    Args:
+        file_path: .nde 文件的绝对路径
+        model_name: 模型名称
+
+    Returns:
+        dict: {
+            "prediction": "Dl",
+            "probabilities": {class: prob, ...},
+            "confidence": 0.873,
+            "model_name": "...",
+            "class_names": ["Dl", "Db", ...],
+            "model_type": "random_forest",
+        }
+    """
+    model, meta = load_model_for_testing(model_name)
+    class_names = meta["class_names"]
+    model_type = meta.get("model_type", "random_forest")
+
+    # 读取数据
+    with h5py.File(file_path, "r") as f:
+        ds_path = None
+        for c in ["Public/Groups/0/Datasets/0-AScanAmplitude", "0-AScanAmplitude", "AScanAmplitude"]:
+            if c in f:
+                ds_path = c
+                break
+        if ds_path is None:
+            def finder(name, obj):
+                if isinstance(obj, h5py.Dataset) and obj.ndim == 3:
+                    raise StopIteration(name)
+            try:
+                f.visititems(finder)
+            except StopIteration as e:
+                ds_path = str(e)
+        if ds_path is None:
+            raise ValueError("未找到数据张量")
+
+        data = f[ds_path][()]
+        data = np.squeeze(data)
+        if data.ndim != 2:
+            raise ValueError(f"数据维度不正确: {data.ndim}")
+
+        # 读取元数据（两个模型分支都可能用到）
+        try:
+            raw_label = f["Private/GlobalLabel"][()]
+            label_obj = json.loads(raw_label.decode("utf-8"))
+        except Exception:
+            label_obj = {}
+        try:
+            raw_mat = f["Private/MaterialInfo"][()]
+            material_obj = json.loads(raw_mat.decode("utf-8"))
+        except Exception:
+            material_obj = {}
+
+    if model_type == "deep_cnn_lstm_transformer":
+        if not DEEP_LEARNING_AVAILABLE:
+            raise RuntimeError("PyTorch 未安装")
+        X = np.expand_dims(_standardize_2d(data), axis=0).astype(np.float32)
+        # 标准化
+        mean = X.mean(axis=(1, 2), keepdims=True)
+        std = X.std(axis=(1, 2), keepdims=True) + 1e-8
+        X = (X - mean) / std
+
+        device = next(model.parameters()).device
+        with torch.no_grad():
+            inputs = torch.from_numpy(X).float().to(device)
+            outputs = model(inputs)
+            probs = torch.softmax(outputs, dim=1)[0].cpu().tolist()
+    else:
+        # RandomForest
+        signal_feats = extract_features(data)
+        meta_feats = encode_metadata(label_obj, material_obj)
+        feats = np.concatenate([signal_feats, meta_feats]).reshape(1, -1)
+
+        probs_raw = model.predict_proba(feats)[0]
+        # 对齐到 class_names 顺序
+        idx_to_class_model = {i: c for i, c in enumerate(model.classes_)}
+        probs = [0.0] * len(class_names)
+        for i, c in idx_to_class_model.items():
+            if i < len(probs_raw) and c in class_names:
+                probs[class_names.index(c)] = float(probs_raw[i])
+        pred = model.predict(feats)[0]
+
+    # 整理结果
+    idx_to_class = {i: c for i, c in enumerate(class_names)}
+    pred_idx = int(np.argmax(probs))
+    prediction = idx_to_class[pred_idx]
+    confidence = float(probs[pred_idx])
+    prob_dict = {class_names[i]: round(float(probs[i]), 4) for i in range(len(class_names))}
+    top3_idx = np.argsort(probs)[-3:][::-1]
+    top3 = [f"{idx_to_class[int(i)]}({probs[int(i)]:.1%})" for i in top3_idx]
+
+    return {
+        "prediction": prediction,
+        "probabilities": prob_dict,
+        "confidence": round(confidence, 4),
+        "top3": top3,
+        "model_name": model_name,
+        "class_names": class_names,
+        "model_type": model_type,
+    }
+
+
 REPORT_DIR = os.path.join(os.path.dirname(__file__), "reports")
 os.makedirs(REPORT_DIR, exist_ok=True)
 
@@ -1221,7 +1327,10 @@ def generate_inspection_report(
         run = conclusion_p.add_run(f'缺陷类型：{defect_result}')
         run.font.bold = True
         run.font.size = Pt(12)
-        doc.add_paragraph(f'置信度：{confidence:.1f}%')
+        if confidence > 0:
+            doc.add_paragraph(f'置信度：{confidence:.1f}%')
+        else:
+            doc.add_paragraph('置信度：参考分析文本（AI 生成结论）')
     else:
         conclusion_p.add_run('未检测到明显缺陷信号，判定为正常区域（OK）。')
 

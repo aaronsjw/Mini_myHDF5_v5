@@ -29,6 +29,10 @@ Desktop.ini
 temp/
 tmp/
 
+# Environment variables
+.env
+backend/.env
+
 # Uploaded files
 uploads/
 

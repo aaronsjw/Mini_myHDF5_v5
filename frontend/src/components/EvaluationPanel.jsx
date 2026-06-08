@@ -63,12 +63,11 @@ export default function EvaluationPanel() {
     try {
       const res = await axios.post('http://127.0.0.1:8000/upload', form)
       if (res.data) {
-        // 读取文件元数据
-        const treeRes = await axios.get('http://127.0.0.1:8000/tree')
         const metaInfo = await extractMeta(file.name)
         setUploadedFile({
           name: file.name,
           size: file.size,
+          path: res.data.file_path,
           meta: metaInfo,
         })
         setMessages(prev => [
@@ -87,7 +86,7 @@ export default function EvaluationPanel() {
     return false
   }
 
-  // 模拟提取元数据（后续由后端提供）
+  // 从文件名解析元数据
   const extractMeta = async (filename) => {
     try {
       const parts = filename.replace('.nde', '').split('_')
@@ -103,69 +102,127 @@ export default function EvaluationPanel() {
     }
   }
 
+  // 判断问题是否需要文件分析
+  const needsFileAnalysis = (text) => {
+    const keywords = ['缺陷', '分析', '信号', '检测', '评估', '判断', '类型', '分类', '结果', '预测', 'bscan', 'ascan', '热力图', '波形']
+    return keywords.some(k => text.includes(k))
+  }
+
+  // 读取流式文本（后端 StreamingResponse text/plain）
+  const readStream = async (reader, decoder, onText, onDone) => {
+    let fullText = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      const chunk = decoder.decode(value, { stream: true })
+      fullText += chunk
+
+      // 检查结束标记
+      const doneIdx = fullText.indexOf('\n__DONE__')
+      if (doneIdx !== -1) {
+        const textBeforeDone = fullText.slice(0, doneIdx)
+        if (textBeforeDone) onText(textBeforeDone)
+        onDone(textBeforeDone)
+        return
+      }
+
+      if (chunk) onText(fullText)
+    }
+    onDone(fullText)
+  }
+
   // 发送消息
   const handleSend = async () => {
     if (!inputText.trim() && !uploadedFile) return
-    if (!uploadedFile) {
-      message.warning('请先上传一个 .nde 文件')
-      return
-    }
 
-    const question = inputText.trim() || '请详细分析这个文件'
+    const question = inputText.trim() || (uploadedFile ? '请详细分析这个文件' : '你好')
     setMessages(prev => [...prev, { role: 'user', content: question }])
     setInputText('')
     setAnalyzing(true)
     setStreamingText('')
+    setShowReportPrompt(false)
+    setReportInfo(null)
 
-    // 模拟流式输出（后续接入后端 SSE）
-    const mockAnalysis = `## 信号分析报告
+    // 如果问题需要分析文件但没上传
+    if (!uploadedFile && needsFileAnalysis(question)) {
+      const reply = `好的，我注意到你想了解关于缺陷分析的信息。\n\n不过目前你还没有上传 **.nde 文件**，请点击输入框左侧的上传按钮上传一个文件，然后我就可以为你进行详细的信号分析和缺陷判断了。\n\n当然，你也可以先问我一些复合材料检测相关的通用问题 😊`
+      let idx = 0
+      const interval = setInterval(() => {
+        if (idx < reply.length) {
+          setStreamingText(reply.slice(0, idx + 1))
+          idx += 2
+        } else {
+          clearInterval(interval)
+          setMessages(prev => [...prev, { role: 'assistant', content: reply }])
+          setStreamingText('')
+          setAnalyzing(false)
+        }
+      }, 20)
+      return
+    }
 
-### 材料与检测参数
-- **纤维类型**：${uploadedFile.meta?.fiber || 'CF'}
-- **基体类型**：${uploadedFile.meta?.matrix || 'EP'}
-- **结构类型**：${uploadedFile.meta?.structure || 'Plate'}
-- **检测方法**：${uploadedFile.meta?.method || 'WRUT'}
-- **缺陷类型**：${uploadedFile.meta?.defectType || 'OK'}
+    try {
+      const response = await fetch('http://127.0.0.1:8000/chat/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question,
+          model_name: selectedModel || '',
+        }),
+      })
 
-### 信号特征分析
-对上传的 .nde 文件进行信号处理和分析，结果如下：
-
-- **幅值范围**：信号幅值在 -1876.5 到 +2034.2 之间
-- **信号能量**：总能量约为 1.23×10⁵
-- **信噪比**：估算 SNR 约 24.3 dB，信号质量良好
-- **回波特征**：在采样点 300-500 区间出现明显衰减，衰减幅度约 45%
-- **底波分析**：底波幅值为正常值的 62%，存在一定能量衰减
-
-### 综合分析
-
-根据信号特征和材料参数，该检测点的特征与 **Dl（分层）** 类型缺陷的典型模式高度吻合：
-
-1. **回波时间提前**：分层界面的反射回波到达时间比正常区域提前约 15%，表明声波在表层附近即发生反射
-2. **幅值衰减明显**：最大幅值仅为正常区域的 55%，说明存在声阻抗不连续界面
-3. **底波能量降低**：底波信号强度下降至正常水平的 62%，进一步确认存在内部界面反射
-
-**结论**：该检测点判定为 **Dl（分层）** 缺陷，置信度约 **87.3%**。
-
-> 建议对该区域进行进一步扫描以确定分层范围。`
-
-    // 逐字输出模拟
-    let idx = 0
-    const interval = setInterval(() => {
-      if (idx < mockAnalysis.length) {
-        setStreamingText(mockAnalysis.slice(0, idx + 1))
-        idx += 1
-      } else {
-        clearInterval(interval)
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: mockAnalysis,
-          bscan: true,
-        }])
-        setStreamingText('')
-        setAnalyzing(false)
-        setShowReportPrompt(true)
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
       }
-    }, 30)
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+
+      await readStream(
+        reader,
+        decoder,
+        (text) => {
+          setStreamingText(text)
+        },
+        (finalText) => {
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: finalText,
+          }])
+          setStreamingText('')
+          setAnalyzing(false)
+          // 有文件时才显示报告生成提示
+          if (uploadedFile) setShowReportPrompt(true)
+        }
+      )
+    } catch (err) {
+      setStreamingText(prev => prev + `\n\n⚠️ 请求出错: ${err.message}`)
+      setAnalyzing(false)
+    }
+  }
+
+  // 从 AI 回复中提取缺陷类型
+  const extractDefectType = (text) => {
+    // 常见的缺陷类型标记
+    const defectTypes = ['Dl', 'Db', 'Po', 'Vo', 'In', 'Fb', 'Rs', 'Uc', 'OK', 'Cp']
+    for (const dt of defectTypes) {
+      if (text.includes(`**${dt}**`) || text.includes(dt + '（') || text.includes(dt + '(')) {
+        return dt
+      }
+    }
+    return 'OK'
+  }
+
+  // 从 AI 回复中提取置信度
+  const extractConfidence = (text) => {
+    const match = text.match(/(\d+\.?\d*)\s*[%％]/)
+    if (match) {
+      const val = parseFloat(match[1])
+      return val > 1 ? val : val * 100  // 处理 87.3% 或 0.873 两种格式
+    }
+    return 0
   }
 
   // 请求生成检测报告
@@ -173,12 +230,13 @@ export default function EvaluationPanel() {
     setReportInfo({ loading: true, url: null, error: null })
     try {
       const lastMsg = messages.filter(m => m.role === 'assistant').pop()
+      const content = lastMsg?.content || ''
       const res = await axios.post('http://127.0.0.1:8000/chat/report', {
         filename: uploadedFile?.name || 'unknown.nde',
         meta: uploadedFile?.meta || {},
-        signal_analysis: lastMsg?.content || '',
-        defect_result: lastMsg?.content?.includes('Dl') ? 'Dl' : 'OK',
-        confidence: lastMsg?.content?.includes('87.3') ? 87.3 : 0,
+        signal_analysis: content,
+        defect_result: extractDefectType(content),
+        confidence: extractConfidence(content),
         model_name: selectedModel || '',
       })
       if (res.data.success) {
@@ -432,7 +490,6 @@ export default function EvaluationPanel() {
                     background: '#f0f0f0', border: '1px solid #d9d9d9', color: '#666',
                   }}
                   onClick={() => {
-                    if (!uploadedFile) { message.warning('请先上传文件'); return }
                     setInputText(text)
                     setTimeout(() => inputRef.current?.focus(), 100)
                   }}
@@ -541,8 +598,8 @@ export default function EvaluationPanel() {
                 handleSend()
               }
             }}
-            placeholder={uploadedFile ? '输入你的问题…' : '请先上传一个 .nde 文件'}
-            disabled={analyzing || !uploadedFile}
+            placeholder={'输入你的问题，或上传 .nde 文件进行分析…'}
+            disabled={analyzing}
             rows={4}
             autoSize={{ minRows: 4, maxRows: 8 }}
             style={{
@@ -569,7 +626,7 @@ export default function EvaluationPanel() {
               icon={<SendOutlined />}
               size="large"
               onClick={handleSend}
-              disabled={analyzing || !uploadedFile || !inputText.trim()}
+              disabled={analyzing || !inputText.trim()}
               loading={analyzing}
               style={{ width: 48, height: 44 }}
             />
