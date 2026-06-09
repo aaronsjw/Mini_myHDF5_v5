@@ -169,3 +169,61 @@ def analyze_signal(file_path: str) -> dict:
         "n_rows": n_rows,
         "n_cols": n_cols,
     }
+
+
+def analyze_waveform_per_frame(file_path: str) -> dict:
+    """
+    逐帧分析 A-Scan 波形，返回全量数据和每帧的异常标记。
+
+    Returns:
+        dict: {
+            "bscan": [[...], ...],          # 全量 [N, 2000]
+            "n_frames": N,
+            "frame_energy": [float, ...],    # 每帧能量
+            "abnormal_frames": [int, ...],   # 异常帧索引列表
+            "abnormal_indices": [int, ...],  # 同 abnormal_frames
+            "frame_stats": [{peak, mean, std, energy}, ...],
+        }
+    """
+    data = load_nde_signal(file_path)
+    n_frames = data.shape[0]
+    frame_energy = []
+    abnormal_frames = []
+    frame_stats = []
+
+    # 每帧能量 = sum(|信号|^2)，能量低=衰减(可能缺陷)，能量高=强反射(也可能缺陷)
+    all_energy = np.sum(data ** 2, axis=1)
+    median_energy = np.median(all_energy)
+    # 用四分位距(IQR)作为离散度指标，比标准差更抗异常值干扰
+    q1 = np.percentile(all_energy, 25)
+    q3 = np.percentile(all_energy, 75)
+    iqr = q3 - q1
+
+    # 异常判定：能量低于 Q1-1.5*IQR（显著衰减）或高于 Q3+1.5*IQR（显著增强）
+    low_threshold = q1 - 1.5 * iqr
+    high_threshold = q3 + 1.5 * iqr
+
+    for i in range(n_frames):
+        row = data[i, :]
+        energy = float(np.sum(row ** 2))
+        peak = float(np.max(np.abs(row)))
+        mean = float(np.mean(row))
+        std = float(np.std(row))
+        frame_energy.append(round(energy, 2))
+        frame_stats.append({
+            "peak": round(peak, 2),
+            "mean": round(mean, 4),
+            "std": round(std, 4),
+            "energy": round(energy, 2),
+        })
+        if energy < low_threshold or energy > high_threshold:
+            abnormal_frames.append(i)
+
+    return {
+        "bscan": data.tolist(),
+        "n_frames": n_frames,
+        "frame_energy": frame_energy,
+        "abnormal_frames": abnormal_frames,
+        "abnormal_indices": abnormal_frames,
+        "frame_stats": frame_stats,
+    }

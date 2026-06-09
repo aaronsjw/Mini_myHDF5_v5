@@ -5,6 +5,7 @@ import ReactECharts from 'echarts-for-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import axios from 'axios'
+import AScanPlayer from './AScanPlayer'
 
 const DEFECT_COLORS = {
   OK: '#52c41a', Dl: '#f5222d', Db: '#fa8c16', Po: '#fadb14',
@@ -47,6 +48,7 @@ export default function EvaluationPanel() {
   const [streamingText, setStreamingText] = useState('')
   const [showReportPrompt, setShowReportPrompt] = useState(false)
   const [reportInfo, setReportInfo] = useState(null)  // null | {loading, url, error}
+  const [signalWaveform, setSignalWaveform] = useState(null)  // {bscan, abnormal_frames, ...}
 
   const msgEndRef = useRef(null)
   const inputRef = useRef(null)
@@ -83,6 +85,7 @@ export default function EvaluationPanel() {
       const res = await axios.post('http://127.0.0.1:8000/upload', form)
       if (res.data) {
         const metaInfo = await extractMeta(file.name)
+        setSignalWaveform(null)
         setUploadedFile({
           name: file.name,
           size: file.size,
@@ -201,6 +204,16 @@ export default function EvaluationPanel() {
           }])
           setStreamingText('')
           setAnalyzing(false)
+          // 有文件时自动拉取 A-Scan 波形数据
+          if (uploadedFile) {
+            axios.get('http://127.0.0.1:8000/chat/signal_waveform')
+              .then(res => {
+                if (res.data && res.data.bscan) {
+                  setSignalWaveform(res.data)
+                }
+              })
+              .catch(() => {})
+          }
         }
       )
     } catch (err) {
@@ -364,6 +377,26 @@ export default function EvaluationPanel() {
               ),
             }]}
             style={{ maxWidth: 550, marginTop: 8 }}
+          />
+        )}
+
+        {/* A-Scan 波形播放器：只有最新一条助手消息显示 */}
+        {!isUser && signalWaveform?.bscan && idx === messages.length - 1 && (
+          <Collapse
+            ghost
+            size="small"
+            defaultActiveKey={['waveform']}
+            items={[{
+              key: 'waveform',
+              label: <span style={{ color: '#f5222d', fontSize: 13 }}>📈 查看 A-Scan 波形（异常帧红色标注）</span>,
+              children: (
+                <AScanPlayer
+                  bscan={signalWaveform.bscan}
+                  abnormalFrames={signalWaveform.abnormal_frames || signalWaveform.abnormal_indices || []}
+                />
+              ),
+            }]}
+            style={{ maxWidth: 550, marginTop: 4 }}
           />
         )}
       </div>

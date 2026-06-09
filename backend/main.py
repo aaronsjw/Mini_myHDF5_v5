@@ -20,7 +20,7 @@ from trainer import (
     generate_inspection_report,
     predict_single_file,
 )
-from signal_analysis import analyze_signal, load_nde_meta
+from signal_analysis import analyze_signal, load_nde_meta, analyze_waveform_per_frame
 from deepseek_client import chat_stream
 
 
@@ -569,6 +569,19 @@ def chat_current_file():
             "nde_meta": meta,
         }
     return {"file_path": None, "filename": None, "meta": None}
+
+
+@app.get("/chat/signal_waveform")
+def chat_signal_waveform():
+    """返回当前文件的 A-Scan 全量波形数据和逐帧异常信息"""
+    global current_file
+    if not current_file or not os.path.exists(current_file):
+        return {"error": "没有已上传的文件"}
+    try:
+        data = analyze_waveform_per_frame(current_file)
+        return data
+    except Exception as e:
+        return {"error": f"分析失败: {str(e)}"}
 
 
 @app.post("/chat/ask")
