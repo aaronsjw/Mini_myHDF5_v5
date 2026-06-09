@@ -576,6 +576,7 @@ async def chat_ask(req: dict):
     """智能评估对话接口（SSE 流式）"""
     question = req.get("question", "").strip()
     model_name = req.get("model_name", "")
+    ai_mode = req.get("ai_mode", "cloud")
 
     # 如果没有问题，返回空
     if not question:
@@ -658,7 +659,7 @@ async def chat_ask(req: dict):
             pred_lines.append(f"- 使用模型：{prediction['model_name']}")
 
         # ── 构造 system prompt ──
-        system_prompt = f"""你是一个复合材料超声检测（NDE）智能评估专家。你的任务是根据提供的 .nde 文件信号特征和模型预测结果，综合分析是否存在缺陷以及缺陷类型。
+        system_prompt = f"""你是复合材料智能检测与评估助手小史。你的任务是根据提供的 .nde 文件信号特征和模型预测结果，综合分析是否存在缺陷以及缺陷类型。
 
 ## 材料与检测参数
 {chr(10).join(meta_lines) if meta_lines else "- 未获取到详细参数"}
@@ -679,29 +680,111 @@ async def chat_ask(req: dict):
 4. 分析要详细、专业，涵盖材料参数、信号特征、缺陷判断、置信度评估
 5. 用中文回复，适当使用 Markdown 格式（标题、加粗、列表、引用等）
 6. 如果置信度低于60%，要提示"需要进一步确认"
-7. 回复末尾加上 "> 如需生成检测报告，请告诉我。" """
+"""
         else:
             system_prompt += f"""
 ## 分析规则
 1. 依据上述信号特征进行分析，给出初步结论
 2. 坦诚告知模型预测置信度不足，建议进一步检测
 3. 用中文回复，适当使用 Markdown 格式
-4. 回复末尾加上 "> 如需生成检测报告，请告诉我。" """
+"""
 
     else:
         # ── 无文件：通用助手指令 ──
-        system_prompt = """你是一个复合材料超声检测（NDE）智能评估助手。你可以：
+        # 检测是否询问数据库信息
+        dataset_keywords = ['数据库', '缺陷类型', '材料', '纤维', '基体', '结构', '检测方法',
+                            '有哪些', '有什么', '几个缺陷', '多少文件', '数据集', 'data', '样本']
+        asks_about_dataset = any(k in question for k in dataset_keywords)
+        dataset_info = get_dataset_summary() if asks_about_dataset else None
+
+        if dataset_info:
+            defect_detail = "、".join([f"{k}({v}个)" for k, v in dataset_info["by_defect"].items()])
+            system_prompt = f"""你是复合材料智能检测与评估助手小史。当前数据库的信息如下：
+
+## 数据集概况
+- 总文件数：{dataset_info['total_files']} 个 .nde 文件
+- 缺陷类型：{', '.join(dataset_info['defect_types'])}
+- 各类缺陷分布：{defect_detail}
+- 纤维类型：{', '.join(dataset_info['fibers'])}
+- 基体类型：{', '.join(dataset_info['matrixes'])}
+- 结构类型：{', '.join(dataset_info['structures'])}
+- 检测方法：{', '.join(dataset_info['methods'])}
+
+## 命名规则缩写含义（当用户问及缩写含义时参考）
+
+### 缺陷类型
+OK=好区, Dl=分层(Delamination), Db=脱粘(Debonding), Po=孔隙(Porosity), Vo=气孔(Void), In=夹杂(Inclusion), Fb=纤维相关（纤维屈曲/褶皱）, Rs=树脂相关（富脂/贫胶）, Cp=耦合不良, Uc=不可识别(Unclassified)
+
+### 纤维类型
+CF=碳纤维, GF=玻璃纤维/石英纤维, BF=硼纤维, AF=芳纶纤维, C/SiC=碳/碳化硅
+
+### 基体类型
+EP=环氧, BMI=双马, PI=聚酰亚胺, TP=热塑, SiC=碳化硅
+
+### 结构
+Plate=平板, Taper=变厚度平板, RZone=R区, BondPP=板板胶接, BondSC=板芯胶接, Hybrid=混杂铺层
+
+### 检测方法
+WRUT=水耦合反射/水浸单探头, WPUT=水穿透, DBUT=延迟块耦合单探头, PAUT=相控阵, AUT=空耦, LUT=激光
+
+请根据以上真实数据回答用户的问题，用中文回复，适当使用 Markdown 格式。如果用户有进一步问题，可以引导用户上传 .nde 文件进行具体分析。"""
+        else:
+            system_prompt = """你是复合材料智能检测与评估助手小史。你可以：
 1. 介绍复合材料超声检测的相关知识
 2. 解释常见的缺陷类型（分层、脱粘、气孔、夹杂等）
 3. 回答关于 NDE 检测工艺的问题
 4. 引导用户上传 .nde 文件进行具体分析
 
+当用户询问缩写含义时，可参考以下信息：
+- 缺陷类型：OK=好区, Dl=分层, Db=脱粘, Po=孔隙, Vo=气孔, In=夹杂, Fb=纤维相关, Rs=树脂相关, Cp=耦合不良, Uc=不可识别
+- 纤维类型：CF=碳纤维, GF=玻璃纤维, BF=硼纤维, AF=芳纶纤维, C/SiC=碳/碳化硅
+- 基体类型：EP=环氧, BMI=双马, PI=聚酰亚胺, TP=热塑, SiC=碳化硅
+- 结构：Plate=平板, Taper=变厚度平板, RZone=R区, BondPP=板板胶接, BondSC=板芯胶接, Hybrid=混杂铺层
+- 检测方法：WRUT=水耦合反射/水浸, WPUT=水穿透, DBUT=延迟块耦合, PAUT=相控阵, AUT=空耦, LUT=激光
+
 请用中文回复，适当使用 Markdown 格式。如果用户询问具体文件分析，请提醒用户上传 .nde 文件。"""
 
-    # ── 调用 DeepSeek API 流式返回 ──
-    messages = [{"role": "user", "content": question}]
-
+    # ── 调用 AI 流式返回 ──
     async def text_generator():
+        if ai_mode == 'local':
+            if not has_file:
+                yield "⚠️ **本地模型模式**仅支持对已上传的 .nde 文件进行预测分析。\n\n请先上传一个 .nde 文件，或者切换至 **DeepSeek 云端** 模式进行对话。"
+                yield "\n__DONE__"
+                return
+            if not prediction or "error" in prediction:
+                yield "⚠️ **本地模型模式**：没有可用的模型，请先在「模型训练」中训练一个模型。\n\n切换至 **DeepSeek 云端** 模式可获得详细分析。"
+                yield "\n__DONE__"
+                return
+
+            # 本地模型模式：直接输出模型预测结果
+            content = f"""## 本地模型分析结果
+
+### 模型信息
+- **模型名称**：{prediction['model_name']}
+- **模型类型**：{prediction['model_type']}
+
+### 预测结果
+- **Top-1 预测**：**{prediction['prediction']}**
+- **置信度**：{prediction['confidence']:.1%}
+- **Top-3**：{', '.join(prediction['top3'])}
+
+### 各类别概率详情
+
+| 类别 | 概率 |
+|------|------|
+"""
+            for cls, prob in sorted(prediction['probabilities'].items(), key=lambda x: x[1], reverse=True):
+                bar_len = int(prob * 30)
+                bar = '█' * bar_len + '░' * (30 - bar_len)
+                content += f"| **{cls}** | {prob:.1%} {bar} |\n"
+
+            content += """
+> 当前使用本地模型进行评估，如需更详细的分析（信号特征、材料参数等），请切换至 **DeepSeek 云端** 模式。"""
+            yield content
+            yield "\n__DONE__"
+            return
+
+        messages = [{"role": "user", "content": question}]
         try:
             async for text in chat_stream(
                 messages=messages,
@@ -715,6 +798,57 @@ async def chat_ask(req: dict):
             yield "\n__DONE__"
 
     return StreamingResponse(text_generator(), media_type="text/plain")
+
+
+def get_dataset_summary():
+    """扫描 dataset/ 目录，返回数据集概要信息"""
+    import re
+    base = os.path.join(os.path.dirname(__file__), "..", "dataset")
+    if not os.path.isdir(base):
+        return None
+
+    pattern = re.compile(
+        r"^(\w+)_(\w+)_(\w+)_(\w+)_(\w+)_(\w+)_(\d{14})_(.+)\.nde$"
+    )
+
+    defect_types = set()
+    fibers = set()
+    matrixes = set()
+    structures = set()
+    methods = set()
+    total = 0
+    by_defect = {}
+
+    for defect_dir in sorted(os.listdir(base)):
+        dir_path = os.path.join(base, defect_dir)
+        if not os.path.isdir(dir_path):
+            continue
+        nde_files = [f for f in os.listdir(dir_path) if f.lower().endswith(".nde")]
+        if not nde_files:
+            continue
+
+        count = 0
+        for fname in nde_files:
+            m = pattern.match(fname)
+            if m:
+                fibers.add(m.group(1))
+                matrixes.add(m.group(2))
+                structures.add(m.group(3))
+                methods.add(m.group(4))
+                defect_types.add(m.group(5))
+            count += 1
+        by_defect[defect_dir] = count
+        total += count
+
+    return {
+        "total_files": total,
+        "defect_types": sorted(defect_types),
+        "by_defect": by_defect,
+        "fibers": sorted(fibers),
+        "matrixes": sorted(matrixes),
+        "structures": sorted(structures),
+        "methods": sorted(methods),
+    }
 
 
 @app.get("/dataset_overview")

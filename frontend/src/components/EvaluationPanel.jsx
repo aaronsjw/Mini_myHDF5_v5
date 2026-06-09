@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Card, Button, Select, Upload, Input, Tag, message, Spin, Collapse, Space } from 'antd'
+import { Card, Button, Select, Upload, Input, Tag, message, Spin, Collapse, Space, Segmented } from 'antd'
 import { SendOutlined, UploadOutlined, RobotOutlined, UserOutlined, DownOutlined, DownloadOutlined } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import axios from 'axios'
 
 const DEFECT_COLORS = {
@@ -13,15 +14,33 @@ const DEFECT_COLORS = {
 
 const { TextArea } = Input
 
+// 共享 Markdown 组件样式
+const markdownComponents = {
+  strong: ({ children }) => <strong style={{ color: '#333' }}>{children}</strong>,
+  code: ({ children }) => <code style={{ background: '#e6e6e6', padding: '1px 4px', borderRadius: 3, fontSize: 13 }}>{children}</code>,
+  table: ({ children }) => (
+    <table style={{ borderCollapse: 'collapse', width: '100%', margin: '8px 0', fontSize: 13 }}>
+      {children}
+    </table>
+  ),
+  thead: ({ children }) => <thead style={{ background: '#fafafa' }}>{children}</thead>,
+  th: ({ children }) => (
+    <th style={{ border: '1px solid #d9d9d9', padding: '6px 10px', fontWeight: 'bold', textAlign: 'center' }}>
+      {children}
+    </th>
+  ),
+  td: ({ children }) => (
+    <td style={{ border: '1px solid #d9d9d9', padding: '4px 10px', textAlign: 'center' }}>
+      {children}
+    </td>
+  ),
+}
+
 export default function EvaluationPanel() {
   const [models, setModels] = useState([])
   const [selectedModel, setSelectedModel] = useState(null)
-  const [messages, setMessages] = useState([
-    {
-      role: 'assistant',
-      content: '你好！我是复合材料智能评估助手。\n\n请上传一个 **.nde** 文件，然后告诉我你想了解什么，比如：\n\n- "是否有缺陷？"\n- "这是什么类型的缺陷？"\n- "分析一下信号特征"',
-    }
-  ])
+  const [aiMode, setAiMode] = useState('cloud')  // 'cloud' | 'local'
+  const [messages, setMessages] = useState([])
   const [inputText, setInputText] = useState('')
   const [uploadedFile, setUploadedFile] = useState(null)
   const [analyzing, setAnalyzing] = useState(false)
@@ -101,13 +120,6 @@ export default function EvaluationPanel() {
       return null
     }
   }
-
-  // 判断问题是否需要文件分析
-  const needsFileAnalysis = (text) => {
-    const keywords = ['缺陷', '分析', '信号', '检测', '评估', '判断', '类型', '分类', '结果', '预测', 'bscan', 'ascan', '热力图', '波形']
-    return keywords.some(k => text.includes(k))
-  }
-
   // 读取流式文本（后端 StreamingResponse text/plain）
   const readStream = async (reader, decoder, onText, onDone) => {
     let fullText = ''
@@ -135,33 +147,28 @@ export default function EvaluationPanel() {
 
   // 发送消息
   const handleSend = async () => {
-    if (!inputText.trim() && !uploadedFile) return
+    if (!inputText.trim()) return
 
-    const question = inputText.trim() || (uploadedFile ? '请详细分析这个文件' : '你好')
+    const question = inputText.trim()
+
+    // 检测是否在索要检测报告（只显示报告按钮，不自动生成）
+    const wantsReport = /^(需要|要|开|出具|生成)(一份|一个)?(检测)?报告/.test(question) ||
+                        /报告/.test(question)
+
+    if (wantsReport && uploadedFile) {
+      setMessages(prev => [...prev, { role: 'user', content: question }])
+      setInputText('')
+      setShowReportPrompt(true)
+      setReportInfo(null)
+      return
+    }
+
     setMessages(prev => [...prev, { role: 'user', content: question }])
     setInputText('')
     setAnalyzing(true)
     setStreamingText('')
     setShowReportPrompt(false)
     setReportInfo(null)
-
-    // 如果问题需要分析文件但没上传
-    if (!uploadedFile && needsFileAnalysis(question)) {
-      const reply = `好的，我注意到你想了解关于缺陷分析的信息。\n\n不过目前你还没有上传 **.nde 文件**，请点击输入框左侧的上传按钮上传一个文件，然后我就可以为你进行详细的信号分析和缺陷判断了。\n\n当然，你也可以先问我一些复合材料检测相关的通用问题 😊`
-      let idx = 0
-      const interval = setInterval(() => {
-        if (idx < reply.length) {
-          setStreamingText(reply.slice(0, idx + 1))
-          idx += 2
-        } else {
-          clearInterval(interval)
-          setMessages(prev => [...prev, { role: 'assistant', content: reply }])
-          setStreamingText('')
-          setAnalyzing(false)
-        }
-      }, 20)
-      return
-    }
 
     try {
       const response = await fetch('http://127.0.0.1:8000/chat/ask', {
@@ -170,6 +177,7 @@ export default function EvaluationPanel() {
         body: JSON.stringify({
           question,
           model_name: selectedModel || '',
+          ai_mode: aiMode,
         }),
       })
 
@@ -193,8 +201,6 @@ export default function EvaluationPanel() {
           }])
           setStreamingText('')
           setAnalyzing(false)
-          // 有文件时才显示报告生成提示
-          if (uploadedFile) setShowReportPrompt(true)
         }
       )
     } catch (err) {
@@ -338,12 +344,7 @@ export default function EvaluationPanel() {
             {isUser ? (
               msg.content
             ) : (
-              <ReactMarkdown
-                components={{
-                  strong: ({ children }) => <strong style={{ color: '#333' }}>{children}</strong>,
-                  code: ({ children }) => <code style={{ background: '#e6e6e6', padding: '1px 4px', borderRadius: 3, fontSize: 13 }}>{children}</code>,
-                }}
-              >
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                 {msg.content}
               </ReactMarkdown>
             )}
@@ -397,12 +398,7 @@ export default function EvaluationPanel() {
             fontSize: 14,
             lineHeight: 1.8,
           }}>
-            <ReactMarkdown
-              components={{
-                strong: ({ children }) => <strong style={{ color: '#333' }}>{children}</strong>,
-                code: ({ children }) => <code style={{ background: '#e6e6e6', padding: '1px 4px', borderRadius: 3, fontSize: 13 }}>{children}</code>,
-              }}
-            >
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
               {streamingText}
             </ReactMarkdown>
             {analyzing && <span style={{ animation: 'blink 1s infinite', marginLeft: 2 }}>▌</span>}
@@ -413,7 +409,7 @@ export default function EvaluationPanel() {
   }
 
   // 欢迎页（无消息时）
-  const showWelcome = messages.length === 1 && !uploadedFile
+  const showWelcome = messages.length === 0 && !uploadedFile
 
   return (
     <div style={{
@@ -436,7 +432,17 @@ export default function EvaluationPanel() {
           <RobotOutlined style={{ fontSize: 22, color: '#52c41a' }} />
           <span style={{ fontSize: 16, fontWeight: 'bold' }}>复合材料智能评估</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Segmented
+            value={aiMode}
+            onChange={setAiMode}
+            size="small"
+            options={[
+              { value: 'cloud', label: '☁️ DeepSeek 云端' },
+              { value: 'local', label: '💻 本地模型' },
+            ]}
+          />
+          <span style={{ fontSize: 13, color: '#666', whiteSpace: 'nowrap' }}>模型选择：</span>
           <Select
             value={selectedModel}
             onChange={setSelectedModel}
