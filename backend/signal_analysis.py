@@ -157,7 +157,7 @@ def analyze_signal(file_path: str) -> dict:
                 "start": pos,
                 "end": min(pos + window_size, n_cols),
                 "center": pos + window_size // 2,
-                "desc": f"异常高能区域，能量为平均水平的 {ratio:.1f} 倍",
+                "desc": "异常高能区域",
             })
         abnormal_desc = abnormal_zone_positions[0]["desc"]
     else:

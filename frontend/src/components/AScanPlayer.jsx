@@ -5,17 +5,35 @@ import ReactECharts from 'echarts-for-react'
 const ABNORMAL_COLOR = '#f5222d'
 const NORMAL_COLOR = '#1890ff'
 
+const GRID_LEFT = 45
+const GRID_RIGHT = 15
+const GRID_TOP = 15 // 实际按 currentWave.length 动态计算
+
 export default function AScanPlayer({ bscan, abnormalFrames, abnormalZones }) {
   const [frameIndex, setFrameIndex] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [playSpeed, setPlaySpeed] = useState(100)
   const playTimer = useRef(null)
+  const containerRef = useRef(null)
+  const [chartWidth, setChartWidth] = useState(600)
 
   const nFrames = bscan?.length || 0
-  const totalPoints = bscan?.[0]?.length || 2000  // 采样点数
   const currentWave = bscan?.[frameIndex] || []
   const isAbnormal = abnormalFrames?.includes(frameIndex) || false
-  const waveColor = isAbnormal ? ABNORMAL_COLOR : NORMAL_COLOR
+
+  // 测量容器宽度
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const measure = () => {
+      const w = el.offsetWidth
+      if (w > 0) setChartWidth(w)
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   useEffect(() => {
     if (!playing) { clearInterval(playTimer.current); return }
@@ -40,35 +58,31 @@ export default function AScanPlayer({ bscan, abnormalFrames, abnormalZones }) {
     })
   }
 
-  // 计算当前帧每个异常区域的峰值位置（用于定位标注）
-  const currentAnnotations = (() => {
-    if (!isAbnormal || !abnormalZones?.length) return []
-    return abnormalZones.map(zone => {
-      const seg = currentWave.slice(zone.start, zone.end)
-      let peakIdx = zone.center
-      if (seg.length > 0) {
-        const abs = seg.map(v => Math.abs(v))
-        peakIdx = zone.start + abs.indexOf(Math.max(...abs))
-      }
-      return {
-        ...zone,
-        peakIdx,
-        // x 轴百分比位置（相对于 2000 个采样点）
-        xPct: (peakIdx / totalPoints) * 100,
-      }
-    })
+  // 计算异常峰值点的像素位置
+  const annPosition = (() => {
+    if (!isAbnormal || !abnormalZones?.length || !currentWave.length) return null
+    const zone = abnormalZones[0]
+    const seg = currentWave.slice(zone.start, zone.end)
+    let peakIdx = zone.center
+    if (seg.length > 0) {
+      const abs = seg.map(v => Math.abs(v))
+      peakIdx = zone.start + abs.indexOf(Math.max(...abs))
+    }
+    const n = currentWave.length
+    const plotW = chartWidth - GRID_LEFT - GRID_RIGHT
+    const x = GRID_LEFT + (peakIdx / (n - 1)) * plotW
+    return { x, peakIdx }
   })()
 
-  // 红色背景区域（ECharts 实现）
   const markAreaData = !isAbnormal || !abnormalZones?.length ? [] : abnormalZones.map(z => [
     { xAxis: z.start },
-    { xAxis: z.end, itemStyle: { color: 'rgba(245,34,45,0.08)' } },
+    { xAxis: z.end, itemStyle: { color: 'rgba(245,34,45,0.25)' } },
   ])
 
   const waveformOption = {
     animation: false,
     tooltip: { trigger: 'axis', formatter: p => `幅值: ${p[0]?.value?.toFixed(1)}` },
-    grid: { top: 5, bottom: 20, left: 45, right: 15 },
+    grid: { top: GRID_TOP, bottom: 20, left: GRID_LEFT, right: GRID_RIGHT },
     xAxis: {
       type: 'category',
       data: currentWave.map((_, i) => i),
@@ -82,13 +96,13 @@ export default function AScanPlayer({ bscan, abnormalFrames, abnormalZones }) {
     },
     series: [{
       type: 'line', smooth: true, showSymbol: false,
-      lineStyle: { width: 1.5, color: waveColor },
+      lineStyle: { width: 1.5, color: NORMAL_COLOR },
       areaStyle: {
         color: {
           type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
           colorStops: [
-            { offset: 0, color: waveColor + '30' },
-            { offset: 1, color: waveColor + '05' },
+            { offset: 0, color: NORMAL_COLOR + '30' },
+            { offset: 1, color: NORMAL_COLOR + '05' },
           ],
         },
       },
@@ -101,16 +115,16 @@ export default function AScanPlayer({ bscan, abnormalFrames, abnormalZones }) {
     <>
       {currentWave.length > 0 && (
         <Card style={{ marginBottom: 12 }}>
-          <div style={{ position: 'relative' }}>
+          <div ref={containerRef} style={{ position: 'relative' }}>
             <ReactECharts option={waveformOption} style={{ height: 250 }} />
 
-            {/* HTML 浮层标注 */}
-            {currentAnnotations.map((ann, i) => (
-              <div key={i} style={{
+            {/* 纯像素定位的标注浮层 */}
+            {annPosition && (
+              <div style={{
                 position: 'absolute',
-                left: `${ann.xPct}%`,
+                left: annPosition.x,
                 top: 0,
-                transform: 'translateX(-50%)',
+                transform: 'translateX(0)',
                 pointerEvents: 'none',
                 zIndex: 10,
               }}>
@@ -123,22 +137,19 @@ export default function AScanPlayer({ bscan, abnormalFrames, abnormalZones }) {
                   lineHeight: 1.5,
                   color: '#333',
                   whiteSpace: 'nowrap',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
                 }}>
-                  ⚠ {ann.desc}
+                  <span style={{ color: '#fa8c16', fontSize: 13, fontWeight: 'bold' }}>⚠️</span> 异常高能区域
                 </div>
                 <div style={{
-                  display: 'flex', justifyContent: 'center', height: 6,
-                }}>
-                  <div style={{
-                    width: 0, height: 0,
-                    borderLeft: '5px solid transparent',
-                    borderRight: '5px solid transparent',
-                    borderTop: `6px solid ${ABNORMAL_COLOR}`,
-                  }} />
-                </div>
+                  width: 0, height: 0,
+                  borderTop: `8px solid ${ABNORMAL_COLOR}`,
+                  borderRight: '8px solid transparent',
+                  borderLeft: 0,
+                  marginTop: -1,
+                  marginLeft: 8,
+                }} />
               </div>
-            ))}
+            )}
           </div>
 
           {nFrames > 0 && (
