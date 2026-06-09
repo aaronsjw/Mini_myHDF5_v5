@@ -20,7 +20,7 @@ from trainer import (
     generate_inspection_report,
     predict_single_file,
 )
-from signal_analysis import analyze_signal, load_nde_meta, analyze_waveform_per_frame
+from signal_analysis import analyze_signal, load_nde_meta, analyze_waveform_per_frame, analyze_waveform_keypoints
 from deepseek_client import chat_stream
 
 
@@ -580,8 +580,9 @@ def chat_signal_waveform():
     try:
         waveform = analyze_waveform_per_frame(current_file)
         signal = analyze_signal(current_file)
-        # 合并异常区域信息
+        keypoints_data = analyze_waveform_keypoints(current_file)
         waveform["abnormal_zone_positions"] = signal.get("abnormal_zone_positions", [])
+        waveform["keypoints"] = keypoints_data.get("keypoints", [])
         return waveform
     except Exception as e:
         return {"error": f"分析失败: {str(e)}"}
@@ -599,6 +600,12 @@ async def chat_ask(req: dict):
         async def empty_gen():
             yield "\n__DONE__"
         return StreamingResponse(empty_gen(), media_type="text/plain")
+
+    # 检测是否询问数据库信息
+    dataset_keywords = ['数据库', '缺陷类型', '材料', '纤维', '基体', '结构', '检测方法',
+                        '有哪些', '有什么', '几个缺陷', '多少文件', '数据集', 'data', '样本']
+    asks_about_dataset = any(k in question for k in dataset_keywords)
+    dataset_info = get_dataset_summary() if asks_about_dataset else None
 
     # 确定是否有上传文件
     has_file = current_file is not None and os.path.exists(current_file)
@@ -696,6 +703,7 @@ async def chat_ask(req: dict):
 4. 分析要详细、专业，涵盖材料参数、信号特征、缺陷判断、置信度评估
 5. 用中文回复，适当使用 Markdown 格式（标题、加粗、列表、引用等）
 6. 如果置信度低于60%，要提示"需要进一步确认"
+7. **重要：Dl=分层(Delamination)，Db=脱粘(Debonding)。不要在回复中把 Dl 和 Db 的中文名搞反！**
 """
         else:
             system_prompt += f"""
@@ -707,45 +715,7 @@ async def chat_ask(req: dict):
 
     else:
         # ── 无文件：通用助手指令 ──
-        # 检测是否询问数据库信息
-        dataset_keywords = ['数据库', '缺陷类型', '材料', '纤维', '基体', '结构', '检测方法',
-                            '有哪些', '有什么', '几个缺陷', '多少文件', '数据集', 'data', '样本']
-        asks_about_dataset = any(k in question for k in dataset_keywords)
-        dataset_info = get_dataset_summary() if asks_about_dataset else None
-
-        if dataset_info:
-            defect_detail = "、".join([f"{k}({v}个)" for k, v in dataset_info["by_defect"].items()])
-            system_prompt = f"""你是复合材料智能检测与评估助手小史。当前数据库的信息如下：
-
-## 数据集概况
-- 总文件数：{dataset_info['total_files']} 个 .nde 文件
-- 缺陷类型：{', '.join(dataset_info['defect_types'])}
-- 各类缺陷分布：{defect_detail}
-- 纤维类型：{', '.join(dataset_info['fibers'])}
-- 基体类型：{', '.join(dataset_info['matrixes'])}
-- 结构类型：{', '.join(dataset_info['structures'])}
-- 检测方法：{', '.join(dataset_info['methods'])}
-
-## 命名规则缩写含义（当用户问及缩写含义时参考）
-
-### 缺陷类型
-OK=好区, Dl=分层(Delamination), Db=脱粘(Debonding), Po=孔隙(Porosity), Vo=气孔(Void), In=夹杂(Inclusion), Fb=纤维相关（纤维屈曲/褶皱）, Rs=树脂相关（富脂/贫胶）, Cp=耦合不良, Uc=不可识别(Unclassified)
-
-### 纤维类型
-CF=碳纤维, GF=玻璃纤维/石英纤维, BF=硼纤维, AF=芳纶纤维, C/SiC=碳/碳化硅
-
-### 基体类型
-EP=环氧, BMI=双马, PI=聚酰亚胺, TP=热塑, SiC=碳化硅
-
-### 结构
-Plate=平板, Taper=变厚度平板, RZone=R区, BondPP=板板胶接, BondSC=板芯胶接, Hybrid=混杂铺层
-
-### 检测方法
-WRUT=水耦合反射/水浸单探头, WPUT=水穿透, DBUT=延迟块耦合单探头, PAUT=相控阵, AUT=空耦, LUT=激光
-
-请根据以上真实数据回答用户的问题，用中文回复，适当使用 Markdown 格式。如果用户有进一步问题，可以引导用户上传 .nde 文件进行具体分析。"""
-        else:
-            system_prompt = """你是复合材料智能检测与评估助手小史。你可以：
+        system_prompt = """你是复合材料智能检测与评估助手小史。你可以：
 1. 介绍复合材料超声检测的相关知识
 2. 解释常见的缺陷类型（分层、脱粘、气孔、夹杂等）
 3. 回答关于 NDE 检测工艺的问题
@@ -759,6 +729,22 @@ WRUT=水耦合反射/水浸单探头, WPUT=水穿透, DBUT=延迟块耦合单探
 - 检测方法：WRUT=水耦合反射/水浸, WPUT=水穿透, DBUT=延迟块耦合, PAUT=相控阵, AUT=空耦, LUT=激光
 
 请用中文回复，适当使用 Markdown 格式。如果用户询问具体文件分析，请提醒用户上传 .nde 文件。"""
+    # ── 如果询问数据库信息，追加数据集描述 ──
+    if dataset_info:
+        defect_detail = "、".join([f"{k}({v}个)" for k, v in dataset_info["by_defect"].items()])
+        dataset_block = f"""
+
+## 数据集概况（当前数据库）
+- 总文件数：{dataset_info['total_files']} 个 .nde 文件
+- 缺陷类型：{", ".join(dataset_info['defect_types'])}
+- 各类缺陷分布：{defect_detail}
+- 纤维类型：{", ".join(dataset_info['fibers'])}
+- 基体类型：{", ".join(dataset_info['matrixes'])}
+- 结构类型：{", ".join(dataset_info['structures'])}
+- 检测方法：{", ".join(dataset_info['methods'])}
+
+请根据以上真实数据回答用户的问题。"""
+        system_prompt += dataset_block
 
     # ── 调用 AI 流式返回 ──
     async def text_generator():

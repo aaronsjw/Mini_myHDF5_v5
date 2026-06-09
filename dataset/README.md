@@ -60,3 +60,23 @@
 | Rs | 树脂相关 Resin-related（富脂、贫胶） |
 | Cp | 耦合不良 Coupling-related（探头耦合不充分、水膜异常等） |
 | Uc | 不可识别 Unclassified |
+
+
+## 逐帧标注说明
+
+| 符号 | 含义 | 说明 |
+|------|------|------|
+| · 或 N | Normal | 正常超声 A 扫波形，是检测的起始和基准，所有模型都必须首先能准确识别它 |
+| [ | 噪音起始点 | |
+| ] | 噪音中止点 | |
+| DL | Delamination | 分层。最常见且最重要的缺陷波形，FIB 形态与正常波形差异显著，是检测模型必须识别的核心缺陷类型 |
+| DB | Debonding | 脱粘 |
+| P | Porosity | 孔隙 |
+| V | Voids | 气孔 |
+| I | Inclusion | 夹杂 |
+| F | Fiber-related | 纤维相关 |
+| RR | Resin-Rich Area | 富树脂 |
+| RS | Resin-Starved Area | 贫胶 |
+| T | Transition | 波形过渡、信号转换 |
+| U | Unclassifiable | 不可分类 |
+| ~ | Signal quality change | 信号质量发生变化 |

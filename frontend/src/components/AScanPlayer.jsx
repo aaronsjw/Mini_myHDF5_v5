@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { Card, Slider, Button, Tag, InputNumber } from 'antd'
 import ReactECharts from 'echarts-for-react'
 
@@ -9,7 +9,7 @@ const GRID_LEFT = 45
 const GRID_RIGHT = 15
 const GRID_TOP = 15 // 实际按 currentWave.length 动态计算
 
-export default function AScanPlayer({ bscan, abnormalFrames, abnormalZones }) {
+export default function AScanPlayer({ bscan, abnormalFrames, abnormalZones, keypoints }) {
   const [frameIndex, setFrameIndex] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [playSpeed, setPlaySpeed] = useState(100)
@@ -79,6 +79,28 @@ export default function AScanPlayer({ bscan, abnormalFrames, abnormalZones }) {
     { xAxis: z.end, itemStyle: { color: 'rgba(245,34,45,0.25)' } },
   ])
 
+  // 当前帧的界波和底波标注线
+  const keypointLines = useMemo(() => {
+    if (!keypoints || !keypoints[frameIndex]) return []
+    const kp = keypoints[frameIndex]
+    const lines = []
+    if (kp.surface_peak > 0) {
+      lines.push({
+        xAxis: kp.surface_peak,
+        lineStyle: { color: '#52c41a', type: 'dashed', width: 1.5 },
+        label: { formatter: '界波', color: '#52c41a', fontSize: 10, fontWeight: 'bold' },
+      })
+    }
+    if (kp.backwall_peak > 0) {
+      lines.push({
+        xAxis: kp.backwall_peak,
+        lineStyle: { color: '#722ed1', type: 'dashed', width: 1.5 },
+        label: { formatter: '底波', color: '#722ed1', fontSize: 10, fontWeight: 'bold' },
+      })
+    }
+    return lines
+  }, [keypoints, frameIndex])
+
   const waveformOption = {
     animation: false,
     tooltip: { trigger: 'axis', formatter: p => `幅值: ${p[0]?.value?.toFixed(1)}` },
@@ -108,6 +130,7 @@ export default function AScanPlayer({ bscan, abnormalFrames, abnormalZones }) {
       },
       data: currentWave,
       markArea: markAreaData.length > 0 ? { silent: true, data: markAreaData } : undefined,
+      markLine: keypointLines.length > 0 ? { symbol: 'none', silent: true, data: keypointLines } : undefined,
     }],
   }
 

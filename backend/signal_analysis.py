@@ -246,3 +246,52 @@ def analyze_waveform_per_frame(file_path: str) -> dict:
         "abnormal_indices": abnormal_frames,
         "frame_stats": frame_stats,
     }
+
+
+def detect_surface_and_backwall(ascan: np.ndarray) -> dict:
+    """
+    从单帧 A-Scan 波形中识别界波（表面波）和底波（底面回波）。
+
+    逻辑：
+    1. 界波 = 整段信号中幅值最大的波峰（表面反射通常最强）
+    2. 底波 = 界波之后，信号最后一段中的最大波峰
+    """
+    n = len(ascan)
+    abs_signal = np.abs(ascan)
+
+    # 界波：跳过前 1% 电噪声，找全局最大幅值
+    search_start = int(n * 0.01)
+    global_max_idx = int(np.argmax(abs_signal[search_start:])) + search_start
+    surface_peak = global_max_idx
+    surface_amp = float(ascan[surface_peak])
+
+    # 底波：从界波之后偏移 15%（避开界波波包）到末尾 3%（避开尾部噪声）
+    bw_start = min(surface_peak + int(n * 0.15), int(n * 0.85))
+    bw_end = int(n * 0.97)
+    bw_seg = abs_signal[bw_start:bw_end]
+    if len(bw_seg) == 0:
+        backwall_peak = bw_start
+        backwall_amp = 0
+    else:
+        local_max = int(np.argmax(bw_seg))
+        backwall_peak = bw_start + local_max
+        backwall_amp = float(ascan[backwall_peak])
+
+    return {
+        "surface_peak": int(surface_peak),
+        "surface_amplitude": round(surface_amp, 2),
+        "backwall_peak": int(backwall_peak),
+        "backwall_amplitude": round(backwall_amp, 2),
+    }
+
+
+def analyze_waveform_keypoints(file_path: str) -> dict:
+    """对 .nde 文件所有帧识别界波和底波位置"""
+    data = load_nde_signal(file_path)
+    n_frames = data.shape[0]
+    keypoints = [detect_surface_and_backwall(data[i, :]) for i in range(n_frames)]
+    return {
+        "bscan": data.tolist(),
+        "n_frames": n_frames,
+        "keypoints": keypoints,
+    }

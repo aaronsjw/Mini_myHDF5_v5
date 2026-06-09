@@ -172,6 +172,7 @@ export default function EvaluationPanel() {
     setStreamingText('')
     setShowReportPrompt(false)
     setReportInfo(null)
+    setSignalWaveform(null)  // 清空上次的波形数据，避免显示在后续回复中
 
     try {
       const response = await fetch('http://127.0.0.1:8000/chat/ask', {
@@ -394,6 +395,7 @@ export default function EvaluationPanel() {
                   bscan={signalWaveform.bscan}
                   abnormalFrames={signalWaveform.abnormal_frames || signalWaveform.abnormal_indices || []}
                   abnormalZones={signalWaveform.abnormal_zone_positions || []}
+                  keypoints={signalWaveform.keypoints || []}
                 />
               ),
             }]}
