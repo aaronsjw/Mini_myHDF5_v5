@@ -161,7 +161,7 @@ export default function AScanPlayer({ bscan, abnormalFrames, abnormalZones, keyp
                   color: '#333',
                   whiteSpace: 'nowrap',
                 }}>
-                  <span style={{ color: '#fa8c16', fontSize: 13, fontWeight: 'bold' }}>⚠️</span> 异常高能区域
+                  <span style={{ color: '#fa8c16', fontSize: 13, fontWeight: 'bold' }}>⚠️</span> 异常
                 </div>
                 <div style={{
                   width: 0, height: 0,

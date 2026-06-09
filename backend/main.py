@@ -594,6 +594,7 @@ async def chat_ask(req: dict):
     question = req.get("question", "").strip()
     model_name = req.get("model_name", "")
     ai_mode = req.get("ai_mode", "cloud")
+    history = req.get("history", [])  # 多轮对话历史
 
     # 如果没有问题，返回空
     if not question:
@@ -645,9 +646,13 @@ async def chat_ask(req: dict):
             di = meta.get("DetectionInfo", {})
 
             if gl.get("structure"): meta_lines.append(f"- 结构类型：{gl['structure']}")
-            if mi.get("fiber"): meta_lines.append(f"- 纤维类型：{mi['fiber']}")
-            if mi.get("fiberGrade"): meta_lines.append(f"- 纤维牌号：{mi['fiberGrade']}")
-            if mi.get("matrixGrade"): meta_lines.append(f"- 基体牌号：{mi['matrixGrade']}")
+            # 材料体系：纤维牌号/基体牌号（中文纤维增强中文基体基复合材料）
+            fiber_zh = {"CF":"碳纤维","GF":"玻璃纤维","BF":"硼纤维","AF":"芳纶纤维","C/SiC":"碳/碳化硅"}.get(mi.get("fiber",""), mi.get("fiber",""))
+            matrix_zh = {"EP":"环氧","BMI":"双马","PI":"聚酰亚胺","TP":"热塑","SiC":"碳化硅"}.get(mi.get("matrix",""), mi.get("matrix",""))
+            fg = mi.get("fiberGrade", mi.get("fiber", ""))
+            mg = mi.get("matrixGrade", mi.get("matrix", ""))
+            if fg and mg:
+                meta_lines.append(f"- 材料体系：{fg}/{mg}（{fiber_zh}增强{matrix_zh}基复合材料）")
             if di.get("probeFreq"): meta_lines.append(f"- 探头频率：{di['probeFreq']} MHz")
             if di.get("samplingFreq"): meta_lines.append(f"- 采样频率：{di['samplingFreq']} MHz")
 
@@ -786,7 +791,7 @@ async def chat_ask(req: dict):
             yield "\n__DONE__"
             return
 
-        messages = [{"role": "user", "content": question}]
+        messages = history if history and len(history) > 0 else [{"role": "user", "content": question}]
         try:
             async for text in chat_stream(
                 messages=messages,

@@ -172,7 +172,14 @@ export default function EvaluationPanel() {
     setStreamingText('')
     setShowReportPrompt(false)
     setReportInfo(null)
-    setSignalWaveform(null)  // 清空上次的波形数据，避免显示在后续回复中
+    setSignalWaveform(null)
+
+    // 构建多轮对话历史（只含文本消息，保留最近 40 条）
+    const chatHistory = messages
+      .filter(m => m.content && m.content.trim())
+      .slice(-40)
+      .map(m => ({ role: m.role, content: m.content }))
+    chatHistory.push({ role: 'user', content: question })
 
     try {
       const response = await fetch('http://127.0.0.1:8000/chat/ask', {
@@ -180,6 +187,7 @@ export default function EvaluationPanel() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           question,
+          history: chatHistory,
           model_name: selectedModel || '',
           ai_mode: aiMode,
         }),
@@ -474,7 +482,7 @@ export default function EvaluationPanel() {
             onChange={setAiMode}
             size="small"
             options={[
-              { value: 'cloud', label: '☁️ DeepSeek 云端' },
+              { value: 'cloud', label: '☁️ 云端模型' },
               { value: 'local', label: '💻 本地模型' },
             ]}
           />

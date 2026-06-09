@@ -188,7 +188,7 @@ export default function App() {
                         fontSize: 18,
                         fontWeight: 'bold',
                         textAlign: 'center',
-                        padding: '20px 20px 0'
+                        padding: '20px 20px 20px'
                     }}>
                         复合材料智能检测与评估系统
                     </div>

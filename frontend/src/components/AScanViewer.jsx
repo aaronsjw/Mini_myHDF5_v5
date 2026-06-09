@@ -38,22 +38,50 @@ export default function AScanViewer({
 
   return (
 
-    <>
+    <Card
+      title={`A-Scan Frame ${frameIndex}`}
+      style={{
+        marginBottom:20
+      }}
+    >
+
+      {wave.length > 0 && (
+        <ReactECharts
+          option={{
+            tooltip:{},
+            xAxis:{
+              type:'category',
+              data:wave.map(
+                (_,i)=>i
+              )
+            },
+            yAxis:{
+              type:'value',
+              min:-2000,
+              max:2000
+            },
+            series:[
+              {
+                type:'line',
+                smooth:true,
+                data:wave
+              }
+            ]
+          }}
+          style={{
+            height:400
+          }}
+        />
+      )}
 
       {frames.length > 0 && (
-
-        <Card
-          title={`A-Scan Frame ${frameIndex}`}
-          style={{
-            marginBottom:20
-          }}
-        >
-
+        <>
           <Slider
             min={0}
             max={frames.length - 1}
             value={frameIndex}
             onChange={updateFrame}
+            style={{ marginTop: wave.length > 0 ? 16 : 0 }}
           />
 
           <div
@@ -126,46 +154,9 @@ export default function AScanViewer({
             />
 
           </div>
-
-        </Card>
-
+        </>
       )}
 
-      {wave.length > 0 && (
-
-        <Card title="A-Scan Waveform">
-
-          <ReactECharts
-            option={{
-              tooltip:{},
-              xAxis:{
-                type:'category',
-                data:wave.map(
-                  (_,i)=>i
-                )
-              },
-              yAxis:{
-                type:'value',
-                min:-2000,
-                max:2000
-              },
-              series:[
-                {
-                  type:'line',
-                  smooth:true,
-                  data:wave
-                }
-              ]
-            }}
-            style={{
-              height:400
-            }}
-          />
-
-        </Card>
-
-      )}
-
-    </>
+    </Card>
   )
 }
