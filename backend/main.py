@@ -578,8 +578,11 @@ def chat_signal_waveform():
     if not current_file or not os.path.exists(current_file):
         return {"error": "没有已上传的文件"}
     try:
-        data = analyze_waveform_per_frame(current_file)
-        return data
+        waveform = analyze_waveform_per_frame(current_file)
+        signal = analyze_signal(current_file)
+        # 合并异常区域信息
+        waveform["abnormal_zone_positions"] = signal.get("abnormal_zone_positions", [])
+        return waveform
     except Exception as e:
         return {"error": f"分析失败: {str(e)}"}
 

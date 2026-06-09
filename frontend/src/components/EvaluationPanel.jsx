@@ -393,6 +393,7 @@ export default function EvaluationPanel() {
                 <AScanPlayer
                   bscan={signalWaveform.bscan}
                   abnormalFrames={signalWaveform.abnormal_frames || signalWaveform.abnormal_indices || []}
+                  abnormalZones={signalWaveform.abnormal_zone_positions || []}
                 />
               ),
             }]}

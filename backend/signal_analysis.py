@@ -139,13 +139,31 @@ def analyze_signal(file_path: str) -> dict:
     std_we = np.std(window_energies)
     abnormal_zones = np.where(window_energies > mean_we + 2 * std_we)[0]
 
+    step = window_size // 2
     if len(abnormal_zones) > 0:
         has_abnormal = True
-        ratio = float(window_energies[abnormal_zones[0]] / (mean_we + 1e-10))
-        abnormal_desc = f"在采样点 {int(abnormal_zones[0] * window_size // 2)} 附近检测到异常高能区域，能量为平均水平的 {ratio:.1f} 倍"
+        # 构建结构化异常区域列表
+        abnormal_zone_positions = []
+        seen_zones = set()
+        for az in abnormal_zones:
+            pos = int(az * step)
+            # 去重（相邻窗口可能检测到同一个区域）
+            key = (pos // step) * step
+            if key in seen_zones:
+                continue
+            seen_zones.add(key)
+            ratio = float(window_energies[az] / (mean_we + 1e-10))
+            abnormal_zone_positions.append({
+                "start": pos,
+                "end": min(pos + window_size, n_cols),
+                "center": pos + window_size // 2,
+                "desc": f"异常高能区域，能量为平均水平的 {ratio:.1f} 倍",
+            })
+        abnormal_desc = abnormal_zone_positions[0]["desc"]
     else:
         has_abnormal = False
         abnormal_desc = "未检测到明显异常区域"
+        abnormal_zone_positions = []
 
     # 衰减系数估算：首行 vs 末行能量比
     if n_rows > 1:
@@ -166,6 +184,7 @@ def analyze_signal(file_path: str) -> dict:
         "attenuation": round(attenuation, 4),
         "has_abnormal_zone": has_abnormal,
         "abnormal_zone_desc": abnormal_desc,
+        "abnormal_zone_positions": abnormal_zone_positions,
         "n_rows": n_rows,
         "n_cols": n_cols,
     }
