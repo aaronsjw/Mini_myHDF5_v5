@@ -9,7 +9,7 @@ import {
 } from 'antd'
 
 import ReactECharts from 'echarts-for-react'
-import { DownloadOutlined } from '@ant-design/icons'
+import { DownloadOutlined, SaveOutlined, CheckCircleOutlined } from '@ant-design/icons'
 
 const LABEL_OPTIONS = [
   { value: 0, label: '无缺陷', color: '#52c41a' },
@@ -41,7 +41,11 @@ export default function AScanViewer({
   labels,
   onLabelChange,
 
+  yAxisRange,
+
 }) {
+
+  const [yMin, yMax] = yAxisRange || [-2000, 2000]
 
   // 使用父组件传入的 labels，配合本地乐观更新
   const [localLabels, setLocalLabels] = useState(null)
@@ -85,8 +89,8 @@ export default function AScanViewer({
             },
             yAxis:{
               type:'value',
-              min:-2000,
-              max:2000
+              min: yMin,
+              max: yMax,
             },
             series:[
               {
@@ -177,12 +181,13 @@ export default function AScanViewer({
             <InputNumber
               min={20}
               max={1000}
+              step={10}
               value={playSpeed}
               onChange={v =>
                 setPlaySpeed(v || 100)
               }
               addonAfter="ms"
-              style={{ width: 120 }}
+              style={{ width: 100 }}
             />
 
             {effectiveLabels && effectiveLabels.length > 0 && (
@@ -216,7 +221,20 @@ export default function AScanViewer({
                 <Button
                   type="primary"
                   size="small"
-                  icon={<DownloadOutlined />}
+                  icon={<CheckCircleOutlined />}
+                  style={{ background: '#52c41a', borderColor: '#52c41a' }}
+                  onClick={async () => {
+                    for (let idx = 0; idx < effectiveLabels.length; idx++) {
+                      updateLabel(idx, 0)
+                    }
+                  }}
+                >
+                  一键标注
+                </Button>
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<SaveOutlined />}
                   onClick={async () => {
                     if (!effectiveLabels) return
                     let saved = 0

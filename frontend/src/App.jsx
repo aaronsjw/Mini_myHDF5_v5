@@ -49,7 +49,7 @@ export default function App() {
     const [batchDefectType, setBatchDefectType] = useState('OK')
     const [activeModule, setActiveModule] = useState('labeling')
     const [frameLabels, setFrameLabels] = useState(null)
-    const [currentDatasetPath, setCurrentDatasetPath] = useState('')
+    const [yAxisRange, setYAxisRange] = useState([-2000, 2000])
 
     const heatmapHeight = heatmap
         ? Math.max(300, Math.min(heatmap.length * 6, 800))
@@ -68,7 +68,6 @@ export default function App() {
         setTreeData([])
         setCurrentFile(file.name)
         setFrameLabels(null)
-        setCurrentDatasetPath('')
 
         const form = new FormData()
         form.append('file', file)
@@ -106,6 +105,12 @@ export default function App() {
     const onSelect = async (_, nodeInfo) => {
         const node = nodeInfo.node
         setCurrentPath(node.path)
+        // 根据节点类型设置 y 轴范围
+        if (node.path && node.path.includes('FrameLabels')) {
+            setYAxisRange([-10, 10])
+        } else {
+            setYAxisRange([-2000, 2000])
+        }
         const res = await axios.get('http://127.0.0.1:8000/dataset', {
             params: { path: node.path }
         })
@@ -123,7 +128,6 @@ export default function App() {
             setHeatmap(d.bscan)
             setWave(d.ascan)
             setFrameIndex(0)
-            setCurrentDatasetPath(node.path)
             // 首次加载从后端拉取；已有标注则复用内存
             if (frameLabels === null) {
                 axios.get('http://127.0.0.1:8000/get_frame_labels')
@@ -442,6 +446,7 @@ export default function App() {
                                                                 setPlaySpeed={setPlaySpeed}
                                                                 labels={frameLabels}
                                                                 onLabelChange={handleSaveFrameLabel}
+                                                                yAxisRange={yAxisRange}
                                                             />
                                                         )
                                                     },
