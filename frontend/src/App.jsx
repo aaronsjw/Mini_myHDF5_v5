@@ -49,6 +49,7 @@ export default function App() {
     const [batchDefectType, setBatchDefectType] = useState('OK')
     const [activeModule, setActiveModule] = useState('labeling')
     const [frameLabels, setFrameLabels] = useState(null)
+    const [currentDatasetPath, setCurrentDatasetPath] = useState('')
 
     const heatmapHeight = heatmap
         ? Math.max(300, Math.min(heatmap.length * 6, 800))
@@ -66,6 +67,8 @@ export default function App() {
         setFrameIndex(0)
         setTreeData([])
         setCurrentFile(file.name)
+        setFrameLabels(null)
+        setCurrentDatasetPath('')
 
         const form = new FormData()
         form.append('file', file)
@@ -120,31 +123,32 @@ export default function App() {
             setHeatmap(d.bscan)
             setWave(d.ascan)
             setFrameIndex(0)
-            // 加载逐帧标签
-            axios.get('http://127.0.0.1:8000/get_frame_labels')
-                .then(res => {
-                    if (res.data && res.data.labels) setFrameLabels(res.data.labels)
-                })
-                .catch(() => setFrameLabels(null))
+            setCurrentDatasetPath(node.path)
+            // 首次加载从后端拉取；已有标注则复用内存
+            if (frameLabels === null) {
+                axios.get('http://127.0.0.1:8000/get_frame_labels')
+                    .then(res => {
+                        if (res.data && res.data.labels) setFrameLabels(res.data.labels)
+                    })
+                    .catch(() => setFrameLabels(new Array(d.bscan.length).fill(-1)))
+            }
         }
     }
 
-    // 保存帧标签
-    const handleSaveFrameLabel = async (frameIdx, labelId) => {
-        try {
-            await axios.post('http://127.0.0.1:8000/save_frame_label', {
-                frame_index: frameIdx,
-                label_id: labelId,
-            })
-            setFrameLabels(prev => {
-                if (!prev) return prev
-                const next = [...prev]
-                next[frameIdx] = labelId
-                return next
-            })
-        } catch (err) {
+    // 保存帧标签（乐观更新：先改UI，再保存到后端）
+    const handleSaveFrameLabel = (frameIdx, labelId) => {
+        setFrameLabels(prev => {
+            const base = prev || new Array(frames.length || 64).fill(-1)
+            const next = [...base]
+            next[frameIdx] = labelId
+            return next
+        })
+        axios.post('http://127.0.0.1:8000/save_frame_label', {
+            frame_index: frameIdx,
+            label_id: labelId,
+        }).catch(err => {
             console.error('保存帧标签失败:', err)
-        }
+        })
     }
 
     // =========================================
@@ -436,7 +440,7 @@ export default function App() {
                                                                 setPlaying={setPlaying}
                                                                 playSpeed={playSpeed}
                                                                 setPlaySpeed={setPlaySpeed}
-                                                                frameLabels={frameLabels}
+                                                                labels={frameLabels}
                                                                 onLabelChange={handleSaveFrameLabel}
                                                             />
                                                         )

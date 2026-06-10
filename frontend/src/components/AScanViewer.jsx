@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState } from 'react'
 import {
   Card,
   Slider,
@@ -37,16 +37,28 @@ export default function AScanViewer({
   playSpeed,
   setPlaySpeed,
 
-  // 逐帧逐帧标注
-  frameLabels,
+  // 逐帧标注
+  labels,
   onLabelChange,
 
 }) {
 
+  // 使用父组件传入的 labels，配合本地乐观更新
+  const [localLabels, setLocalLabels] = useState(null)
+  const effectiveLabels = labels || localLabels
+
+  // 更新标签（同时更新本地状态和后端）
+  const updateLabel = (idx, val) => {
+    setLocalLabels(prev => {
+      const next = prev ? [...prev] : new Array(frames?.length || 64).fill(-1)
+      next[idx] = val
+      return next
+    })
+    if (onLabelChange) onLabelChange(idx, val)
+  }
+
   const updateFrame = idx => {
-
     setFrameIndex(idx)
-
     if (frames[idx]) {
       setWave(frames[idx])
     }
@@ -99,9 +111,9 @@ export default function AScanViewer({
             onChange={updateFrame}
             style={{ marginTop: wave.length > 0 ? 16 : 0 }}
             marks={(() => {
-              if (!frameLabels) return {}
+              if (!effectiveLabels) return {}
               const m = {}
-              frameLabels.forEach((v, i) => {
+              effectiveLabels.forEach((v, i) => {
                 if (v === 0) m[i] = <span style={{ fontSize: 16, lineHeight: '14px', color: '#52c41a' }}>●</span>
                 else if (v > 0) m[i] = <span style={{ fontSize: 16, lineHeight: '14px', color: '#f5222d' }}>●</span>
               })
@@ -173,7 +185,7 @@ export default function AScanViewer({
               style={{ width: 120 }}
             />
 
-            {frameLabels && frameLabels.length > 0 && (
+            {effectiveLabels && effectiveLabels.length > 0 && (
               <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Tag color="blue">
                   {frameIndex + 1}
@@ -184,15 +196,15 @@ export default function AScanViewer({
                   逐帧标注：
                 </div>
                 <Radio.Group
-                  value={frameLabels[frameIndex] !== undefined ? frameLabels[frameIndex] : -1}
-                  onChange={e => onLabelChange && onLabelChange(frameIndex, e.target.value)}
+                  value={effectiveLabels[frameIndex] !== undefined ? effectiveLabels[frameIndex] : -1}
+                  onChange={e => updateLabel(frameIndex, e.target.value)}
                   size="small"
                 >
                   {LABEL_OPTIONS.map(opt => (
                     <Radio.Button
                       key={opt.value}
                       value={opt.value}
-                      style={opt.value === frameLabels[frameIndex] ? {
+                      style={opt.value === effectiveLabels[frameIndex] ? {
                         borderColor: opt.color,
                         color: opt.color,
                       } : {}}
@@ -201,6 +213,33 @@ export default function AScanViewer({
                     </Radio.Button>
                   ))}
                 </Radio.Group><span style={{ width: 24 }} />
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<DownloadOutlined />}
+                  onClick={async () => {
+                    if (!effectiveLabels) return
+                    let saved = 0
+                    for (let idx = 0; idx < effectiveLabels.length; idx++) {
+                      const label = effectiveLabels[idx]
+                      if (label !== undefined && label !== -1) {
+                        try {
+                          await fetch('http://127.0.0.1:8000/save_frame_label', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ frame_index: idx, label_id: label }),
+                          })
+                          saved++
+                        } catch (e) {}
+                      }
+                    }
+                    if (saved > 0) {
+                      alert(`保存成功，共 ${saved} 帧`)
+                    }
+                  }}
+                >
+                  保存
+                </Button>
                 <Button
                   type="primary"
                   size="small"

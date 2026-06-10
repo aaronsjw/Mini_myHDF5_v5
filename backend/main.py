@@ -598,8 +598,22 @@ def _get_n_frames_from_file(f: h5py.File) -> int:
             ds = f[c]
             if ds.ndim == 3:
                 return ds.shape[0]
+            if ds.ndim == 2:
+                return ds.shape[0]
             return 64
     return 64
+
+
+def _ensure_frame_labels(f: h5py.File):
+    """确保 Private/FrameLabels 存在且形状正确，返回 (dataset, n_frames)"""
+    if "Private" not in f:
+        f.create_group("Private")
+    n = _get_n_frames_from_file(f)
+    if "Private/FrameLabels" not in f:
+        ds = f.create_dataset("Private/FrameLabels", (n,), dtype=np.int32, fillvalue=-1)
+    else:
+        ds = f["Private/FrameLabels"]
+    return ds, n
 
 
 @app.get("/get_frame_labels")
@@ -636,14 +650,32 @@ def save_frame_label(req: dict):
 
     try:
         with h5py.File(current_file, "r+") as f:
-            if "Private/FrameLabels" not in f:
-                n = _get_n_frames_from_file(f)
-                ds = f.create_dataset("Private/FrameLabels", (n, 1), dtype=np.int32, fillvalue=-1)
-            else:
-                ds = f["Private/FrameLabels"]
+            ds, n = _ensure_frame_labels(f)
+            ds[frame_index] = label_id
+            return {"success": True, "frame_index": frame_index, "label_id": int(ds[frame_index])}
+    except Exception as e:
+        return {"error": str(e)}
 
-            ds[frame_index, 0] = label_id
-            return {"success": True, "frame_index": frame_index, "label_id": int(ds[frame_index, 0])}
+
+@app.post("/save_frame_labels_batch")
+def save_frame_labels_batch(req: dict):
+    """批量保存帧标签"""
+    global current_file
+    labels = req.get("labels", {})
+
+    if not current_file:
+        return {"error": "没有已上传的文件"}
+    if not labels:
+        return {"error": "缺少 labels"}
+
+    try:
+        with h5py.File(current_file, "r+") as f:
+            ds, n = _ensure_frame_labels(f)
+            count = 0
+            for frame_index, label_id in labels.items():
+                ds[int(frame_index)] = int(label_id)
+                count += 1
+            return {"success": True, "saved_count": count}
     except Exception as e:
         return {"error": str(e)}
 
