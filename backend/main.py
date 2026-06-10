@@ -571,6 +571,89 @@ def chat_current_file():
     return {"file_path": None, "filename": None, "meta": None}
 
 
+FRAME_LABEL_OPTIONS = [
+    {"value": -1, "label": "未标注"},
+    {"value": 0, "label": "无缺陷"},
+    {"value": 1, "label": "分层"},
+    {"value": 2, "label": "脱粘"},
+    {"value": 3, "label": "孔隙"},
+    {"value": 4, "label": "气孔"},
+    {"value": 5, "label": "夹杂"},
+    {"value": 6, "label": "纤维相关"},
+    {"value": 7, "label": "富树脂"},
+    {"value": 8, "label": "贫胶"},
+    {"value": 9, "label": "耦合不良"},
+    {"value": 10, "label": "噪音起始"},
+    {"value": 11, "label": "噪音中止"},
+    {"value": 12, "label": "波形过渡"},
+    {"value": 13, "label": "不可分类"},
+    {"value": 14, "label": "信号质量变化"},
+]
+
+
+def _get_n_frames_from_file(f: h5py.File) -> int:
+    """从打开的 HDF5 文件中获取帧数"""
+    for c in ["Public/Groups/0/Datasets/0-AScanAmplitude", "0-AScanAmplitude", "AScanAmplitude"]:
+        if c in f:
+            ds = f[c]
+            if ds.ndim == 3:
+                return ds.shape[0]
+            return 64
+    return 64
+
+
+@app.get("/get_frame_labels")
+def get_frame_labels():
+    """读取当前文件的逐帧标签"""
+    global current_file
+    if not current_file or not os.path.exists(current_file):
+        return {"error": "没有已上传的文件"}
+    try:
+        with h5py.File(current_file, "r") as f:
+            if "Private/FrameLabels" in f:
+                labels = np.squeeze(f["Private/FrameLabels"][()]).tolist()
+                if isinstance(labels, int):
+                    labels = [labels]
+                return {"labels": labels}
+            else:
+                n = _get_n_frames_from_file(f)
+                return {"labels": [-1] * n}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/save_frame_label")
+def save_frame_label(req: dict):
+    """保存某一帧的标签"""
+    global current_file
+    frame_index = req.get("frame_index")
+    label_id = req.get("label_id")
+
+    if not current_file:
+        return {"error": "没有已上传的文件"}
+    if frame_index is None or label_id is None:
+        return {"error": "缺少 frame_index 或 label_id"}
+
+    try:
+        with h5py.File(current_file, "r+") as f:
+            if "Private/FrameLabels" not in f:
+                n = _get_n_frames_from_file(f)
+                ds = f.create_dataset("Private/FrameLabels", (n, 1), dtype=np.int32, fillvalue=-1)
+            else:
+                ds = f["Private/FrameLabels"]
+
+            ds[frame_index, 0] = label_id
+            return {"success": True, "frame_index": frame_index, "label_id": int(ds[frame_index, 0])}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/label_options")
+def label_options():
+    """返回标签选项列表"""
+    return {"options": FRAME_LABEL_OPTIONS}
+
+
 @app.get("/chat/signal_waveform")
 def chat_signal_waveform():
     """返回当前文件的 A-Scan 全量波形数据和逐帧异常信息"""

@@ -48,6 +48,7 @@ export default function App() {
     const [expandedKeys, setExpandedKeys] = useState([])
     const [batchDefectType, setBatchDefectType] = useState('OK')
     const [activeModule, setActiveModule] = useState('labeling')
+    const [frameLabels, setFrameLabels] = useState(null)
 
     const heatmapHeight = heatmap
         ? Math.max(300, Math.min(heatmap.length * 6, 800))
@@ -119,6 +120,30 @@ export default function App() {
             setHeatmap(d.bscan)
             setWave(d.ascan)
             setFrameIndex(0)
+            // 加载逐帧标签
+            axios.get('http://127.0.0.1:8000/get_frame_labels')
+                .then(res => {
+                    if (res.data && res.data.labels) setFrameLabels(res.data.labels)
+                })
+                .catch(() => setFrameLabels(null))
+        }
+    }
+
+    // 保存帧标签
+    const handleSaveFrameLabel = async (frameIdx, labelId) => {
+        try {
+            await axios.post('http://127.0.0.1:8000/save_frame_label', {
+                frame_index: frameIdx,
+                label_id: labelId,
+            })
+            setFrameLabels(prev => {
+                if (!prev) return prev
+                const next = [...prev]
+                next[frameIdx] = labelId
+                return next
+            })
+        } catch (err) {
+            console.error('保存帧标签失败:', err)
         }
     }
 
@@ -390,7 +415,7 @@ export default function App() {
                                         label: 'Display',
                                         children: (
                                             <Tabs
-                                                defaultActiveKey="heatmap"
+                                                defaultActiveKey="ascan"
                                                 items={[
                                                     {
                                                         key: 'matrix',
@@ -411,6 +436,8 @@ export default function App() {
                                                                 setPlaying={setPlaying}
                                                                 playSpeed={playSpeed}
                                                                 setPlaySpeed={setPlaySpeed}
+                                                                frameLabels={frameLabels}
+                                                                onLabelChange={handleSaveFrameLabel}
                                                             />
                                                         )
                                                     },

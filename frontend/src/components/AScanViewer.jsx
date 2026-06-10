@@ -4,10 +4,22 @@ import {
   Slider,
   Button,
   Tag,
-  InputNumber
+  InputNumber,
+  Radio,
 } from 'antd'
 
 import ReactECharts from 'echarts-for-react'
+import { DownloadOutlined } from '@ant-design/icons'
+
+const LABEL_OPTIONS = [
+  { value: 0, label: '无缺陷', color: '#52c41a' },
+  { value: 1, label: '分层', color: '#f5222d' },
+  { value: 2, label: '脱粘', color: '#fa8c16' },
+  { value: 3, label: '孔隙', color: '#fadb14' },
+  { value: 4, label: '气孔', color: '#722ed1' },
+  { value: 5, label: '夹杂', color: '#1890ff' },
+  { value: 9, label: '耦合不良', color: '#d9d9d9' },
+]
 
 export default function AScanViewer({
 
@@ -23,7 +35,11 @@ export default function AScanViewer({
   setPlaying,
 
   playSpeed,
-  setPlaySpeed
+  setPlaySpeed,
+
+  // 逐帧逐帧标注
+  frameLabels,
+  onLabelChange,
 
 }) {
 
@@ -39,7 +55,7 @@ export default function AScanViewer({
   return (
 
     <Card
-      title={`A-Scan Frame ${frameIndex}`}
+      
       style={{
         marginBottom:20
       }}
@@ -82,6 +98,15 @@ export default function AScanViewer({
             value={frameIndex}
             onChange={updateFrame}
             style={{ marginTop: wave.length > 0 ? 16 : 0 }}
+            marks={(() => {
+              if (!frameLabels) return {}
+              const m = {}
+              frameLabels.forEach((v, i) => {
+                if (v === 0) m[i] = <span style={{ fontSize: 16, lineHeight: '14px', color: '#52c41a' }}>●</span>
+                else if (v > 0) m[i] = <span style={{ fontSize: 16, lineHeight: '14px', color: '#f5222d' }}>●</span>
+              })
+              return m
+            })()}
           />
 
           <div
@@ -137,12 +162,6 @@ export default function AScanViewer({
               Next
             </Button>
 
-            <Tag color="blue">
-              {frameIndex + 1}
-              /
-              {frames.length}
-            </Tag>
-
             <InputNumber
               min={20}
               max={1000}
@@ -151,7 +170,48 @@ export default function AScanViewer({
                 setPlaySpeed(v || 100)
               }
               addonAfter="ms"
+              style={{ width: 120 }}
             />
+
+            {frameLabels && frameLabels.length > 0 && (
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Tag color="blue">
+                  {frameIndex + 1}
+                  /
+                  {frames.length}
+                </Tag>
+                <div style={{ fontSize: 12, color: '#666', whiteSpace: 'nowrap' }}>
+                  逐帧标注：
+                </div>
+                <Radio.Group
+                  value={frameLabels[frameIndex] !== undefined ? frameLabels[frameIndex] : -1}
+                  onChange={e => onLabelChange && onLabelChange(frameIndex, e.target.value)}
+                  size="small"
+                >
+                  {LABEL_OPTIONS.map(opt => (
+                    <Radio.Button
+                      key={opt.value}
+                      value={opt.value}
+                      style={opt.value === frameLabels[frameIndex] ? {
+                        borderColor: opt.color,
+                        color: opt.color,
+                      } : {}}
+                    >
+                      {opt.label}
+                    </Radio.Button>
+                  ))}
+                </Radio.Group><span style={{ width: 24 }} />
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<DownloadOutlined />}
+                  href="http://127.0.0.1:8000/download_nde"
+                  target="_blank"
+                >
+                  下载
+                </Button>
+              </div>
+            )}
 
           </div>
         </>

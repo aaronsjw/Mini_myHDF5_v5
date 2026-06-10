@@ -64,19 +64,23 @@
 
 ## 逐帧标注说明
 
-| 符号 | 含义 | 说明 |
-|------|------|------|
-| · 或 N | Normal | 正常超声 A 扫波形，是检测的起始和基准，所有模型都必须首先能准确识别它 |
-| [ | 噪音起始点 | |
-| ] | 噪音中止点 | |
-| DL | Delamination | 分层。最常见且最重要的缺陷波形，FIB 形态与正常波形差异显著，是检测模型必须识别的核心缺陷类型 |
-| DB | Debonding | 脱粘 |
-| P | Porosity | 孔隙 |
-| V | Voids | 气孔 |
-| I | Inclusion | 夹杂 |
-| F | Fiber-related | 纤维相关 |
-| RR | Resin-Rich Area | 富树脂 |
-| RS | Resin-Starved Area | 贫胶 |
-| T | Transition | 波形过渡、信号转换 |
-| U | Unclassifiable | 不可分类 |
-| ~ | Signal quality change | 信号质量发生变化 |
+FrameLabels 中 data[64, 1] 每个元素的值与标签的对应关系：
+
+| 编号 | 符号 | 含义 | 说明 |
+|------|------|------|------|
+| -1 | — | 未标注 | 默认值，尚未标注 |
+| 0 | · 或 N | Normal | 正常超声 A 扫波形，是检测的起始和基准，所有模型都必须首先能准确识别它 |
+| 1 | DL | Delamination | 分层。最常见且最重要的缺陷波形，FIB 形态与正常波形差异显著，是检测模型必须识别的核心缺陷类型 |
+| 2 | DB | Debonding | 脱粘 |
+| 3 | P | Porosity | 孔隙 |
+| 4 | V | Voids | 气孔 |
+| 5 | I | Inclusion | 夹杂 |
+| 6 | F | Fiber-related | 纤维相关 |
+| 7 | RR | Resin-Rich Area | 富树脂 |
+| 8 | RS | Resin-Starved Area | 贫胶 |
+| 9 | Cp | 耦合不良 | |
+| 10 | [ | 噪音起始点 | |
+| 11 | ] | 噪音中止点 | |
+| 12 | T | Transition | 波形过渡、信号转换 |
+| 13 | U | Unclassifiable | 不可分类 |
+| 14 | ~ | Signal quality change | 信号质量发生变化 |
