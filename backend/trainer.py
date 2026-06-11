@@ -1244,7 +1244,281 @@ REPORT_DIR = os.path.join(os.path.dirname(__file__), "reports")
 os.makedirs(REPORT_DIR, exist_ok=True)
 
 
+def parse_dispatch_doc(file_path: str) -> dict:
+    """
+    解析委托单 .doc 文件，提取关键字段。
+    委托单为表格结构，每两行一组（中文标签行 + 英文标签行）。
+    返回字段名→值的字典。
+    """
+    import subprocess, os, shutil, tempfile
+
+    antiword_path = shutil.which("antiword") or shutil.which("antiword.exe")
+    if not antiword_path:
+        for p in [
+            r"E:\Program Files\Git\mingw64\bin\antiword.exe",
+            r"C:\Program Files\Git\mingw64\bin\antiword.exe",
+        ]:
+            if os.path.exists(p):
+                antiword_path = p
+                break
+    if not antiword_path:
+        return {"_error": "antiword 未安装"}
+
+    tmp_txt = tempfile.NamedTemporaryFile(delete=False, suffix='.txt')
+    tmp_txt.close()
+    subprocess.run(f'"{antiword_path}" -m UTF-8 "{file_path}" > "{tmp_txt.name}"',
+                   shell=True)
+    with open(tmp_txt.name, 'r', encoding='utf-8') as f:
+        text = f.read()
+    os.unlink(tmp_txt.name)
+
+    # 中文字段标签 → 字段名映射
+    LABEL_MAP = {
+        "委托单位": "Customer_Addr",
+        "委托日期": "fill_in_date",
+        "零件名称": "Part_name",
+        "材料牌号": "Material_type",
+        "课题或生产令号": "Project_No",
+        "委托检测方法": "Required_method",
+        "检测区域": "Testing_area",
+        "备注": "Remark",
+        "项目负责人": "Project_leader",
+        "要求完成日期": "Required_date",
+        "数量": "Quantity",
+        "制件状态": "Part_status",
+        "检测方法": "Method_Spec",
+        "验收标准": "Standard_level",
+        "图号": "Drawing_No",
+        "质量编号": "S_N",
+    }
+
+    table_lines = [l.strip() for l in text.split('\n') if l.strip().startswith('|')]
+    fields = {}
+
+    # 从文档头提取任务编号（Task No.）
+    import re as _re
+    task_match = _re.search(r'Task No\.\s*[:：]\s*(\S+)', text)
+    if task_match:
+        fields["_Task_No"] = task_match.group(1)
+
+    for row in table_lines:
+        cells = [c.strip() for c in row.split('|')]
+        cells = [c for c in cells if c]
+        for ci, cell in enumerate(cells):
+            for label, fname in LABEL_MAP.items():
+                if label in cell and fname not in fields:
+                    if ci + 1 < len(cells):
+                        val = cells[ci + 1]
+                        # 跳过英文行（含英文关键词）、方框符号、占位符
+                        skip_words = ["Customer", "Project", "Required", "Part", "Quantity",
+                                      "Material", "S/N", "Method", "Specification", "Remark",
+                                      "Date", "Drawing", "status", "fill", "sheet", "level",
+                                      "area", "Testing", "Convention", "Porosity",
+                                      "Thickness", "Other"]
+                        if val and val not in ['□', '□'] and not val.startswith('#'):
+                            is_eng = any(kw in val for kw in skip_words)
+                            if not is_eng:
+                                v = val.rstrip('□').strip()
+                                if v and v != '/':
+                                    fields[fname] = v
+
+    # 跨行拼接：检查"中国航空制造技术研究"+"院"这种情况
+    for i, row in enumerate(table_lines):
+        cells = [c.strip() for c in row.split('|')]
+        cells = [c for c in cells if c]
+        # 如果这行是英文行，看上一个中文行的对应位置是否缺字
+        if "Customer" in row or "sheet" in row:
+            for ci, cell in enumerate(cells):
+                if ci > 0 and ci < len(cells) and len(cell) > 0 and len(cell) < 6 and not any(
+                    kw in cell for kw in ["Customer", "/", "□", "Project", "Required", "fill",
+                                          "leader", "Teleph", "Contractor", "Date", "Agreed",
+                                          "Part", "Quantity", "Drawing", "Material", "status",
+                                          "S/N", "Method", "Specification", "level", "Remark"]):
+                    # 可能是续行，检查上一行同位置的值是否已在 fields 中
+                    if i > 0:
+                        prev = [c.strip() for c in table_lines[i-1].split('|') if c.strip()]
+                        if ci < len(prev):
+                            for fname in list(fields.keys()):
+                                # 如果上一行的对应单元格是这个字段的值
+                                if prev[ci] == fields[fname]:
+                                    fields[fname] = fields[fname] + cell
+                                    break
+
+    return fields
+
+
 def generate_inspection_report(
+    filename: str,
+    meta: dict,
+    signal_analysis: str,
+    defect_result: str,
+    confidence: float,
+    model_name: str = "",
+    dispatch_data: dict = None,
+) -> str:
+    """
+    使用超声检测报告模板 (.docx) 生成检测报告。
+    模板位于项目根目录的 超声检测报告.docx，含 {$...} 占位符。
+    dispatch_data 为委托单解析数据，用于填充报告字段。
+    返回 (报告文件路径, 报告编号)。
+    """
+    import shutil, re, copy
+    from docx import Document
+    from lxml import etree
+
+    report_id = f"JC-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    basename = os.path.splitext(os.path.basename(filename))[0]
+
+    # ── 1. 定位模板文件 ──
+    template_path = os.path.join(os.path.dirname(__file__), "..", "超声检测报告.docx")
+    if not os.path.exists(template_path):
+        # 若模板不存在，回退到程序化生成
+        return _generate_report_fallback(filename, meta, signal_analysis, defect_result, confidence, model_name)
+
+    # ── 2. 复制模板 ──
+    report_path = os.path.join(REPORT_DIR, f"{report_id}.docx")
+    shutil.copy2(template_path, report_path)
+
+    # ── 3. 在 XML 层合并 runs 并替换占位符 ──
+    doc = Document(report_path)
+    ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    NSMAP = {'w': ns}
+
+    # 构建替换映射
+    fiber_zh = {"CF":"碳纤维","GF":"玻璃纤维","BF":"硼纤维","AF":"芳纶纤维","C/SiC":"碳/碳化硅"}
+    matrix_zh = {"EP":"环氧","BMI":"双马","PI":"聚酰亚胺","TP":"热塑","SiC":"碳化硅"}
+    fg = meta.get("fiberGrade", meta.get("fiber", ""))
+    mg = meta.get("matrixGrade", meta.get("matrix", ""))
+    material_str = f"{fg}/{mg}" if fg and mg else f"{meta.get('fiber','-')}/{meta.get('matrix','-')}"
+
+    # 信号分析摘要（取前 5 行关键信息）
+    signal_lines = [l.strip() for l in signal_analysis.strip().split('\n') if l.strip()]
+    signal_summary = '\n'.join(signal_lines[:8]) if signal_lines else '信号分析未完成'
+
+    # 结论
+    if defect_result and defect_result != 'OK':
+        conclusion = f"缺陷类型：{defect_result}（置信度 {confidence:.1f}%）" if confidence > 0 else f"缺陷类型：{defect_result}"
+        result_detail = signal_summary
+    else:
+        conclusion = "未检测到明显缺陷信号，判定为正常区域（OK）"
+        result_detail = signal_summary
+
+    dd = dispatch_data or {}
+    def _dd(k, fallback=""):
+        return dd.get(k) or fallback
+
+    # 任务编号优先用委托单头部的 Task No.
+    task_no = _dd('_Task_No', '')
+    if not task_no or any(c in task_no for c in '/\\|<>:"'):
+        task_no = f"JC-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    # 清理 report_id：只保留字母数字和 -_
+    import re as _re
+    safe_id = _re.sub(r'[^a-zA-Z0-9\-_]', '-', f"{task_no}-01")
+    report_id = safe_id.strip('-')
+    if not report_id:
+        report_id = f"JC-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+
+    # 委托单位名称（从 Customer_Addr 取）
+    cust_name = _dd('Customer_Addr', basename.split('_')[0] if '_' in basename else basename)
+
+    # 检测方法映射
+    method_map = {"UT": "超声反射法", "超声": "超声反射法"}
+    req_method = _dd('Required_method', '')
+    test_method = "超声反射法"
+    for k, v in method_map.items():
+        if k in req_method:
+            test_method = v
+            break
+
+    # 验收标准加"按"前缀
+    std_level = _dd('Standard_level', 'HB 7224-2020 C级')
+    if std_level and not std_level.startswith('按'):
+        std_level = '按' + std_level
+
+    replacements = {
+        '{$报告编号}': report_id,
+        '$VALUE0': cust_name,
+        '{$Task_No}': task_no,
+        '{$Receipt_date}': _dd('fill_in_date', datetime.now().strftime('%Y-%m-%d')),
+        '{$Customer_address}': '北京市顺义区双河大街航空产业园',
+        '{$Part_name}': _dd('Part_name', basename),
+        '{$材料牌号}': _dd('Material_type', material_str),
+        '{$零件状态}': _dd('Part_status', '待检'),
+        '{$图号}': _dd('Drawing_No', meta.get('drawing', '-')),
+        '{$零件编号}': _dd('S_N', basename),
+        '{$数量}': _dd('Quantity', '1'),
+        '{$检测地点}': '北京市顺义区双河大街航空产业园',
+        '{$仪器型号编号}': '700M/Z07161',
+        '{$探头型号编号}': 'FJ-1/Z105007',
+        '{$检测方法规范}': _dd('Method_Spec', '超声脉冲反射法'),
+        '{$验收标准等级}': std_level,
+        '{$检测部位}': _dd('Testing_area', '按文件标注'),
+        '{$委托检测方法}': test_method,
+        '{$检测结果}': result_detail,
+        '{$结论}': conclusion,
+    }
+
+    # 读原始 ZIP
+    import zipfile, io
+    with zipfile.ZipFile(report_path, 'r') as zin:
+        doc_xml = zin.read('word/document.xml')
+
+    root = etree.fromstring(doc_xml)
+
+    # 遍历所有段落，合并相邻 run 中的文本
+    for body_elem in root.iter(f'{{{ns}}}body'):
+        for paragraph in body_elem.iter(f'{{{ns}}}p'):
+            runs = list(paragraph.iter(f'{{{ns}}}r'))
+            if not runs:
+                continue
+
+            # 找出当前段落所有 w:t 元素
+            t_elements = list(paragraph.iter(f'{{{ns}}}t'))
+            if not t_elements:
+                continue
+
+            # 合并所有 t 文本到一个字符串
+            combined = ''.join(t.text or '' for t in t_elements)
+            if not combined.strip():
+                continue
+
+            # 执行替换
+            new_text = combined
+            for key, val in replacements.items():
+                if key in new_text:
+                    new_text = new_text.replace(key, str(val))
+
+            if new_text == combined:
+                continue
+
+            # 把新文本写回第一个 t，清空其余 t
+            # 但需要保留各 t 的样式格式，所以对每个 t 尽量保持
+            # 简化：只改第一个运行，清空后续
+            t_elements[0].text = new_text
+            for t in t_elements[1:]:
+                t.text = ''
+                # 保留 t 元素本身，但设为空
+
+    # 写回 ZIP
+    new_doc_xml = etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
+
+    import io as _io
+    buf = _io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zout:
+        with zipfile.ZipFile(report_path, 'r') as zin:
+            for item in zin.infolist():
+                if item.filename == 'word/document.xml':
+                    zout.writestr(item, new_doc_xml)
+                else:
+                    zout.writestr(item, zin.read(item.filename))
+
+    with open(report_path, 'wb') as f:
+        f.write(buf.getvalue())
+
+    return report_path, report_id
+
+
+def _generate_report_fallback(
     filename: str,
     meta: dict,
     signal_analysis: str,
@@ -1253,8 +1527,7 @@ def generate_inspection_report(
     model_name: str = "",
 ) -> str:
     """
-    生成 Word 格式的超声检测分析报告。
-    返回报告文件的路径。
+    回退方案：程序化生成 Word 报告（当模板不存在时使用）
     """
     from docx import Document
     from docx.shared import Pt, Inches, Cm, RGBColor
@@ -1279,7 +1552,7 @@ def generate_inspection_report(
         run.font.color.rgb = RGBColor(0, 0, 0)
 
     # ═══ 报告信息 ═══
-    doc.add_paragraph('')  # 空行
+    doc.add_paragraph('')
     info_table = doc.add_table(rows=4, cols=4)
     info_table.style = 'Table Grid'
     info_table.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -1298,7 +1571,7 @@ def generate_inspection_report(
                 paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 for run in paragraph.runs:
                     run.font.size = Pt(10)
-                    if j % 2 == 0:  # 标签列加粗
+                    if j % 2 == 0:
                         run.font.bold = True
 
     doc.add_paragraph('')
@@ -1309,7 +1582,6 @@ def generate_inspection_report(
         line = line.strip()
         if not line:
             continue
-        # 处理 Markdown 格式
         if line.startswith('- '):
             p = doc.add_paragraph(line[2:], style='List Bullet')
         elif line.startswith('**') and line.endswith('**'):
@@ -1338,17 +1610,15 @@ def generate_inspection_report(
     doc.add_heading('三、建议', level=1)
     if defect_result and defect_result != 'OK':
         doc.add_paragraph('1. 建议对该区域进行补充扫描，确认缺陷范围。')
-        doc.add_paragraph('2. 建议结合其它无损检测方法（如超声相控阵、X射线）进行交叉验证。')
+        doc.add_paragraph('2. 建议结合其它无损检测方法进行交叉验证。')
         doc.add_paragraph('3. 如确认缺陷，建议评估其对结构完整性的影响。')
     else:
         doc.add_paragraph('1. 当前检测点信号正常，未发现明显异常。')
         doc.add_paragraph('2. 建议按计划继续进行后续检测。')
 
-    # ═══ 声明 ═══
     doc.add_paragraph('')
     doc.add_paragraph('声明：本报告由复合材料智能评估系统自动生成，仅供技术参考。').alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    # ── 保存 ──
     report_path = os.path.join(REPORT_DIR, f"{report_id}.docx")
     doc.save(report_path)
     return report_path, report_id

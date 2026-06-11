@@ -56,9 +56,34 @@ export default function EvaluationPanel() {
   const [disputeEvidenceFile, setDisputeEvidenceFile] = useState(null)
   const [disputeDescription, setDisputeDescription] = useState('')
 
+  // 委托单上传
+  const [showDispatchPrompt, setShowDispatchPrompt] = useState(false)
+  const [dispatchUploading, setDispatchUploading] = useState(false)
+  const [dispatchFile, setDispatchFile] = useState(null)
+  const [dispatchFields, setDispatchFields] = useState(null)
+  const [dispatchDone, setDispatchDone] = useState(false)
+
   const msgEndRef = useRef(null)
   const inputRef = useRef(null)
   const abortRef = useRef(null)
+
+  // 拖拽上传状态
+  const [dragOver, setDragOver] = useState(false)
+  const handleDragOver = (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true) }
+  const handleDragLeave = (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(false) }
+  const handleDrop = (e) => {
+    e.preventDefault(); e.stopPropagation(); setDragOver(false)
+    const files = e.dataTransfer?.files
+    if (files && files.length > 0) {
+      const file = files[0]
+      if (file.name.endsWith('.nde') || file.name.endsWith('.h5') || file.name.endsWith('.hdf5')) {
+        setDragOver(false)
+        handleUpload(file)
+      } else {
+        message.warning('请拖入 .nde / .h5 / .hdf5 文件')
+      }
+    }
+  }
 
   // 停止回复
   const handleStop = () => {
@@ -105,6 +130,10 @@ export default function EvaluationPanel() {
         setSignalWaveform(null)
         setShowDisputePrompt(false)
         setDisputeInfo(null)
+        setShowDispatchPrompt(false)
+        setDispatchDone(false)
+        setDispatchFile(null)
+        setDispatchFields(null)
         setUploadedFile({
           name: file.name,
           size: file.size,
@@ -173,15 +202,24 @@ export default function EvaluationPanel() {
 
     const question = inputText.trim()
 
-    // 检测是否在索要检测报告（只显示报告按钮，不自动生成）
+    // 检测是否在索要检测报告
     const wantsReport = /^(需要|要|开|出具|生成)(一份|一个)?(检测)?报告/.test(question) ||
                         /报告/.test(question)
 
     if (wantsReport && uploadedFile) {
       setMessages(prev => [...prev, { role: 'user', content: question }])
       setInputText('')
-      setShowReportPrompt(true)
-      setReportInfo(null)
+      if (dispatchDone) {
+        // 委托单已上传，直接显示报告按钮
+        setShowReportPrompt(true)
+        setReportInfo(null)
+      } else {
+        // 没有委托单，引导上传
+        setShowDispatchPrompt(true)
+        setDispatchFile(null)
+        setDispatchFields(null)
+        setShowReportPrompt(false)
+      }
       return
     }
 
@@ -193,6 +231,10 @@ export default function EvaluationPanel() {
     setReportInfo(null)
     setShowDisputePrompt(false)
     setDisputeInfo(null)
+    setShowDispatchPrompt(false)
+    setDispatchFile(null)
+    setDispatchFields(null)
+    setDispatchDone(false)
     setSignalWaveform(null)
 
     // 创建 AbortController
@@ -253,10 +295,13 @@ export default function EvaluationPanel() {
               })
               .catch(() => {})
           }
-          // 检测 AI 是否要求提供争议证据
-          const disputeKeywords = ['争议项', '上传证据', '仲裁', '证据']
-          const wantsDispute = disputeKeywords.some(k => (finalText || '').includes(k))
-          if (wantsDispute && uploadedFile) {
+          // 检测用户是否在质疑模型判断（争议项登记逻辑）
+          const userDisputeKeywords = ['不对', '不是', '应该', '错了', '质疑', '不同意', '有异议', '改正', '改成', '改为', '变更为', '不认同', '误判', '判错了']
+          const userDisagree = userDisputeKeywords.some(k => question.toLowerCase().includes(k))
+          // 仅当用户明确质疑 + AI回复提到争议时，才弹出争议项登记
+          const aiDisputeKeywords = ['争议项', '上传证据', '仲裁']
+          const aiMentionsDispute = aiDisputeKeywords.some(k => (finalText || '').includes(k))
+          if (userDisagree && aiMentionsDispute && uploadedFile) {
             setShowDisputePrompt(true)
             setDisputeInfo(null)
             setDisputeEvidenceFile(null)
@@ -323,6 +368,30 @@ export default function EvaluationPanel() {
       setReportInfo({ loading: false, url: null, error: err.message })
       message.error('生成报告失败: ' + err.message)
     }
+  }
+
+  // 上传委托单
+  const handleDispatchUpload = async () => {
+    if (!dispatchFile) return
+    setDispatchUploading(true)
+    try {
+      const form = new FormData()
+      form.append('file', dispatchFile)
+      const res = await axios.post('http://127.0.0.1:8000/dispatch/upload', form)
+      if (res.data.success) {
+        setDispatchFields(res.data.fields)
+        setDispatchDone(true)
+        setShowDispatchPrompt(false)
+        setShowReportPrompt(true)
+        setReportInfo(null)
+        message.success('委托单解析成功，可生成检测报告')
+      } else {
+        message.error('委托单解析失败: ' + (res.data.error || ''))
+      }
+    } catch (err) {
+      message.error('委托单上传失败: ' + err.message)
+    }
+    setDispatchUploading(false)
   }
 
   // 提交争议项
@@ -528,12 +597,20 @@ export default function EvaluationPanel() {
   const showWelcome = messages.length === 0 && !uploadedFile
 
   return (
-    <div style={{
-      height: '100%',
-      display: 'flex',
-      flexDirection: 'column',
-      background: '#f5f5f5',
-    }}>
+    <div
+      style={{
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        background: dragOver ? '#e6f7ff' : '#f5f5f5',
+        border: dragOver ? '2px dashed #1890ff' : '2px solid transparent',
+        boxSizing: 'border-box',
+        transition: 'all 0.2s',
+      }}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       {/* ═══ Header ═══ */}
       <div style={{
         padding: '12px 20px',
@@ -773,6 +850,61 @@ export default function EvaluationPanel() {
                   {disputeInfo?.error && (
                     <div style={{ marginTop: 8, color: '#f5222d', fontSize: 13 }}>
                       ❌ 登记失败：{disputeInfo.error}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* 委托单上传 */}
+            {showDispatchPrompt && !analyzing && (
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'flex-start',
+                marginBottom: 20,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <div style={{
+                    width: 32, height: 32, borderRadius: '50%',
+                    background: '#1890ff',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: '#fff', fontSize: 14,
+                  }}>
+                    📋
+                  </div>
+                  <span style={{ color: '#999', fontSize: 12 }}>委托单上传</span>
+                </div>
+                <div style={{
+                  background: '#e6f7ff',
+                  border: '1px solid #91d5ff',
+                  borderRadius: 12,
+                  borderBottomLeftRadius: 4,
+                  padding: '16px 20px',
+                  fontSize: 14,
+                  width: '100%',
+                  maxWidth: 500,
+                }}>
+                  <div style={{ marginBottom: 10, color: '#1890ff' }}>
+                    📄 请上传填写好的委托单（.doc格式），系统将根据委托单信息生成超声检测报告
+                  </div>
+                  <Upload
+                    accept=".doc"
+                    beforeUpload={(f) => { setDispatchFile(f); return false }}
+                    showUploadList={false}
+                  >
+                    <Button icon={<UploadOutlined />} size="small">
+                      {dispatchFile ? dispatchFile.name : '选择委托单文件'}
+                    </Button>
+                  </Upload>
+                  {dispatchFile && (
+                    <div style={{ marginTop: 8, display: 'flex', gap: 10 }}>
+                      <Button type="primary" size="small" loading={dispatchUploading} onClick={handleDispatchUpload}>
+                        上传并解析
+                      </Button>
+                      <Button size="small" onClick={() => { setShowDispatchPrompt(false); setDispatchFile(null) }}>
+                        取消
+                      </Button>
                     </div>
                   )}
                 </div>

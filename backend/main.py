@@ -18,7 +18,7 @@ from trainer import (
     preview_dataset, start_train, get_status, get_result, list_models, delete_model,
     start_test, get_test_status, get_test_result,
     load_file_for_preview,
-    generate_inspection_report,
+    generate_inspection_report, parse_dispatch_doc,
     predict_single_file,
 )
 from signal_analysis import analyze_signal, load_nde_meta, analyze_waveform_per_frame, analyze_waveform_keypoints
@@ -47,6 +47,7 @@ app.add_middleware(
 current_file = None
 current_zip = None
 current_filename = "modified.nde"
+current_dispatch_data = {}  # 委托单数据
 
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
@@ -512,8 +513,10 @@ def test_file_preview(path: str):
 
 @app.post("/chat/report")
 def chat_report(req: dict):
-    """生成并下载检测报告"""
+    """生成并下载检测报告（含委托单数据）"""
+    global current_dispatch_data
     try:
+        dispatch = req.get("dispatch_data") or current_dispatch_data or {}
         report_path, report_id = generate_inspection_report(
             filename=req.get("filename", "unknown.nde"),
             meta=req.get("meta", {}),
@@ -521,6 +524,7 @@ def chat_report(req: dict):
             defect_result=req.get("defect_result", ""),
             confidence=req.get("confidence", 0),
             model_name=req.get("model_name", ""),
+            dispatch_data=dispatch,
         )
         return {
             "success": True,
@@ -538,6 +542,12 @@ def chat_report_download(report_id: str):
     report_dir = os.path.join(os.path.dirname(__file__), "reports")
     pattern = os.path.join(report_dir, f"{report_id}.docx")
     matches = gglob.glob(pattern)
+    if not matches:
+        # 容错：旧版文件无 -01 后缀
+        if report_id.endswith('-01'):
+            base = report_id[:-3]
+            pattern = os.path.join(report_dir, f"{base}.docx")
+            matches = gglob.glob(pattern)
     if not matches:
         return {"error": "报告文件不存在"}
     return FileResponse(
@@ -821,6 +831,33 @@ async def dispute_submit(
         json.dump(metadata, f, ensure_ascii=False, indent=2)
 
     return {"success": True, "dispute_id": dispute_id, "status": "待仲裁"}
+
+
+# ══════════════════════════════════════════════════
+# 委托单上传 API
+# ══════════════════════════════════════════════════
+
+@app.post("/dispatch/upload")
+async def dispatch_upload(file: UploadFile = File(...)):
+    """上传已填写的委托单 .doc 文件，解析字段"""
+    global current_dispatch_data
+    if not file.filename.endswith('.doc'):
+        return {"success": False, "error": "仅支持 .doc 格式的委托单文件"}
+
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.doc')
+    tmp.write(await file.read())
+    tmp.close()
+
+    try:
+        data = parse_dispatch_doc(tmp.name)
+        current_dispatch_data = data
+        os.unlink(tmp.name)
+        return {"success": True, "fields": data, "message": "委托单解析成功"}
+    except Exception as e:
+        os.unlink(tmp.name)
+        return {"success": False, "error": f"委托单解析失败: {str(e)}"}
+
 
 
 @app.get("/dispute/list")
@@ -1144,6 +1181,29 @@ async def chat_ask(req: dict):
 
     if dispute_ctx:
         system_prompt += dispute_ctx
+
+    # ── 委托单 / 报告相关对话规则 ──
+    dispatch_keywords = ['报告', '委托单', '开具', '开报告', '检测报告']
+    asks_dispatch = any(k in question for k in dispatch_keywords)
+    if asks_dispatch and has_file:
+        dispatch_data_ctx = ""
+        if current_dispatch_data:
+            dispatch_data_ctx = "\n\n## 已解析的委托单数据\n以下字段已从用户上传的委托单中解析出来：\n"
+            for k, v in current_dispatch_data.items():
+                if v:
+                    dispatch_data_ctx += f"- {k}: {v}\n"
+
+        dispatch_note = f"""
+
+## 检测报告 / 委托单处理规则
+
+当用户要求"开具报告"或提到"委托单"时，按以下规则回复：
+
+1. **先要求委托单**：回答"好的，请上传填写好的委托单（.doc格式），系统将根据委托单信息生成正式的超声检测报告。委托单模板在项目根目录下。"
+2. **委托单已上传时**：如果用户已经上传了委托单且系统已解析成功，回复"委托单已收到，正在为您生成检测报告…"并告知用户点击"生成报告"按钮即可下载
+3. **不要代替提交**：AI 本身不能直接生成报告文件，需要用户点击前端按钮触发
+{dispatch_data_ctx}"""
+        system_prompt += dispatch_note
 
     # ── 调用 AI 流式返回 ──
     async def text_generator():
