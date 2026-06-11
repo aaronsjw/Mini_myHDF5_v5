@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Button, Select, Upload, Input, Tag, message, Spin, Collapse, Segmented } from 'antd'
-import { SendOutlined, UploadOutlined, RobotOutlined, UserOutlined, DownloadOutlined } from '@ant-design/icons'
+import { SendOutlined, UploadOutlined, RobotOutlined, UserOutlined, DownloadOutlined, StopOutlined } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -58,6 +58,17 @@ export default function EvaluationPanel() {
 
   const msgEndRef = useRef(null)
   const inputRef = useRef(null)
+  const abortRef = useRef(null)
+
+  // 停止回复
+  const handleStop = () => {
+    if (abortRef.current) {
+      abortRef.current.abort()
+      abortRef.current = null
+    }
+    setAnalyzing(false)
+    setStreamingText('')
+  }
 
   // 自动滚动到底部
   useEffect(() => {
@@ -184,6 +195,10 @@ export default function EvaluationPanel() {
     setDisputeInfo(null)
     setSignalWaveform(null)
 
+    // 创建 AbortController
+    const controller = new AbortController()
+    abortRef.current = controller
+
     // 构建多轮对话历史（只含文本消息，保留最近 40 条）
     const chatHistory = messages
       .filter(m => m.content && m.content.trim())
@@ -195,6 +210,7 @@ export default function EvaluationPanel() {
       const response = await fetch('http://127.0.0.1:8000/chat/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           question,
           history: chatHistory,
@@ -251,7 +267,11 @@ export default function EvaluationPanel() {
         }
       )
     } catch (err) {
-      setStreamingText(prev => prev + `\n\n⚠️ 请求出错: ${err.message}`)
+      if (err.name === 'AbortError') {
+        // 用户主动停止，不显示错误
+      } else {
+        setStreamingText(prev => prev + `\n\n⚠️ 请求出错: ${err.message}`)
+      }
       setAnalyzing(false)
     }
   }
@@ -809,15 +829,24 @@ export default function EvaluationPanel() {
                 style={{ width: 48, height: 44 }}
               />
             </Upload>
-            <Button
-              type="primary"
-              icon={<SendOutlined />}
-              size="large"
-              onClick={handleSend}
-              disabled={analyzing || !inputText.trim()}
-              loading={analyzing}
-              style={{ width: 48, height: 44 }}
-            />
+            {analyzing ? (
+              <Button
+                icon={<StopOutlined style={{ fontSize: 16, color: '#666' }} />}
+                size="large"
+                onClick={handleStop}
+                className="btn-stop"
+                style={{ width: 48, height: 44 }}
+              />
+            ) : (
+              <Button
+                type="primary"
+                icon={<SendOutlined />}
+                size="large"
+                onClick={handleSend}
+                disabled={!inputText.trim()}
+                style={{ width: 48, height: 44 }}
+              />
+            )}
           </div>
         </div>
         <div style={{ textAlign: 'center', color: '#ccc', fontSize: 11, marginTop: 6 }}>
@@ -825,11 +854,16 @@ export default function EvaluationPanel() {
         </div>
       </div>
 
-      {/* 闪烁光标动画 */}
+      {/* 闪烁光标动画 + 停止按钮样式 */}
       <style>{`
         @keyframes blink {
           0%, 50% { opacity: 1; }
           51%, 100% { opacity: 0; }
+        }
+        .btn-stop, .btn-stop:hover, .btn-stop:focus, .btn-stop:active {
+          color: #666 !important;
+          border-color: #d9d9d9 !important;
+          box-shadow: none !important;
         }
       `}</style>
 
