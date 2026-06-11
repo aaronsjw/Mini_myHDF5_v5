@@ -1,0 +1,26 @@
+{
+  "standards": [
+    {
+      "id": "HB 7224-2020",
+      "name": "复合材料构件通用技术条件",
+      "category": "HB",
+      "source_file": "HB 7224-2020_复合材料构件通用技术条件.pdf",
+      "effective_date": "2020-08-01",
+      "description": "航空纤维增强树脂基复合材料构件尺寸公差、制造装配及质量控制要求，含缺陷评定标准",
+      "applicable_materials": ["CF/EP", "CF/BMI", "GF/EP", "CF/TP"],
+      "applicable_structures": ["Plate", "Taper", "BondPP", "BondSC", "Sandwich"],
+      "standard_type": "acceptance"
+    },
+    {
+      "id": "GJB 1038.1A-2004",
+      "name": "纤维增强复合材料无损检测方法 第1部分 超声波检验",
+      "category": "GJB",
+      "source_file": "GJB 1038.1A-2004 纤维增强复合材料无损检测方法 第1部分 超声波检验.pdf",
+      "effective_date": "2004-01-01",
+      "description": "军用纤维增强复合材料超声波检验方法标准，规定检测参数、校准方法及灵敏度设置",
+      "applicable_materials": ["CF/EP", "GF/EP", "CF/BMI", "AF/EP"],
+      "applicable_structures": ["Plate", "Taper", "BondPP"],
+      "standard_type": "method"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "dispute_id": "DSP-20260611-154749-172d11",
+  "timestamp": "2026-06-11T15:47:49.026742",
+  "original_file": "CF_EP_Plate_WRUT_Dl_Z109_20260528110445_ZT9H_1316.nde",
+  "original_prediction": "OK",
+  "user_claim": "我认为这个是脱粘",
+  "user_description": "我认为这个是脱粘",
+  "evidence_file": "F:\\Learn\\learn_torch\\test\\Mini_myHDF5_v5\\backend\\disputes\\DSP-20260611-154749-172d11\\evidence.zip",
+  "nde_file": "F:\\Learn\\learn_torch\\test\\Mini_myHDF5_v5\\backend\\disputes\\DSP-20260611-154749-172d11\\CF_EP_Plate_WRUT_Dl_Z109_20260528110445_ZT9H_1316.nde",
+  "status": "待仲裁"
+}

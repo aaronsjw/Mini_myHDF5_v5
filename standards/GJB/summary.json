@@ -1,0 +1,10 @@
+{
+  "standard_id": "GJB 1038.1A-2004",
+  "name": "纤维增强复合材料无损检测方法 第1部分 超声波检验",
+  "source_file": "GJB 1038.1A-2004 纤维增强复合材料无损检测方法 第1部分 超声波检验.pdf",
+  "effective_date": "2004-01-01",
+  "standard_type": "method",
+  "note": "本标准为超声波检验方法标准，规定检测参数（探头频率、耦合方式、灵敏度设置、校准方法等），不含具体缺陷验收判据。如需缺陷验收判定请使用 HB 7224-2020。",
+  "defect_criteria": [],
+  "complementary_methods": {}
+}

@@ -173,6 +173,43 @@ def analyze_signal(file_path: str) -> dict:
     else:
         attenuation = 1.0
 
+    # ── 验收判定专用特征 ──
+    # 幅值衰减百分比：基于各帧能量差异
+    frame_energies = np.sum(data ** 2, axis=1)
+    max_f_energy = float(np.max(frame_energies))
+    min_f_energy = float(np.min(frame_energies))
+    amp_attenuation = (1 - min_f_energy / (max_f_energy + 1e-10)) * 100
+
+    # 最大连续异常帧数（帧能量低于 Q1-1.5*IQR）
+    q1_f = float(np.percentile(frame_energies, 25))
+    q3_f = float(np.percentile(frame_energies, 75))
+    iqr_f = q3_f - q1_f
+    low_th = q1_f - 1.5 * iqr_f
+    max_consecutive = 0
+    cur_count = 0
+    for e in frame_energies:
+        if e < low_th:
+            cur_count += 1
+            max_consecutive = max(max_consecutive, cur_count)
+        else:
+            cur_count = 0
+    consecutive_abnormal = max_consecutive
+
+    # 峰值位置最大偏移
+    all_peak_pos = [float(p) for p in peak_positions]
+    peak_shift = float(max(all_peak_pos) - min(all_peak_pos)) if len(all_peak_pos) > 1 else 0.0
+
+    # 帧间波形最小相关系数
+    corr_vals = []
+    for i in range(1, n_rows):
+        a, b = data[i - 1], data[i]
+        if np.std(a) > 1e-8 and np.std(b) > 1e-8:
+            corr_vals.append(float(np.corrcoef(a, b)[0, 1]))
+    waveform_corr = min(corr_vals) if corr_vals else 1.0
+
+    # 孔隙率估算（基于整体衰减粗略估计）
+    porosity_estimate = round(min((attenuation - 1) * 5, 10.0), 2) if attenuation > 1 else 0.0
+
     return {
         "amp_range": [round(amp_min, 2), round(amp_max, 2)],
         "energy": round(energy, 2),
@@ -187,6 +224,11 @@ def analyze_signal(file_path: str) -> dict:
         "abnormal_zone_positions": abnormal_zone_positions,
         "n_rows": n_rows,
         "n_cols": n_cols,
+        "amp_attenuation": round(amp_attenuation, 2),
+        "consecutive_abnormal": consecutive_abnormal,
+        "peak_shift": round(peak_shift, 2),
+        "waveform_corr": round(waveform_corr, 4),
+        "porosity_estimate": porosity_estimate,
     }
 
 

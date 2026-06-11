@@ -12,6 +12,7 @@ import shutil
 import glob
 import zipfile
 import re
+from datetime import datetime
 
 from trainer import (
     preview_dataset, start_train, get_status, get_result, list_models, delete_model,
@@ -22,6 +23,7 @@ from trainer import (
 )
 from signal_analysis import analyze_signal, load_nde_meta, analyze_waveform_per_frame, analyze_waveform_keypoints
 from deepseek_client import chat_stream
+from acceptance_checker import AcceptanceChecker
 
 
 app = FastAPI()
@@ -686,6 +688,155 @@ def label_options():
     return {"options": FRAME_LABEL_OPTIONS}
 
 
+# ══════════════════════════════════════════════════
+# 验收判定 API
+# ══════════════════════════════════════════════════
+
+_checker = None
+
+def get_checker():
+    global _checker
+    if _checker is None:
+        _checker = AcceptanceChecker()
+    return _checker
+
+
+@app.get("/acceptance/standards")
+def acceptance_standards():
+    """列出所有可用的验收标准"""
+    try:
+        checker = get_checker()
+        return {"standards": checker.get_index()}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/acceptance/check")
+def acceptance_check(req: dict):
+    """验收判定"""
+    global current_file
+    standard_id = req.get("standard_id", "")
+    defect_type = req.get("defect_type", "")
+    defect_type_en = req.get("defect_type_en", "")
+
+    if not standard_id:
+        return {"error": "缺少 standard_id"}
+
+    try:
+        # 构建信号特征
+        signal_features = {}
+        if current_file and os.path.exists(current_file):
+            try:
+                signal = analyze_signal(current_file)
+                if signal:
+                    signal_features = {k: v for k, v in signal.items() if isinstance(v, (int, float))}
+                    signal_features["detected_frames"] = 64
+            except Exception:
+                pass
+
+        # 如果请求中有额外的特征数据，合并进来
+        req_features = req.get("signal_features", {})
+        if req_features:
+            signal_features.update(req_features)
+
+        detection_result = {
+            "defect_type": defect_type,
+            "defect_type_en": defect_type_en,
+            "confidence": req.get("confidence", 0),
+            "signal_features": signal_features,
+            "prediction": req.get("prediction", {}),
+        }
+
+        checker = get_checker()
+        result = checker.check(standard_id, detection_result)
+        return result
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/acceptance/suggest_standard")
+def acceptance_suggest_standard(req: dict):
+    """根据材料信息自动推荐验收标准"""
+    try:
+        checker = get_checker()
+        meta = req.get("meta", {})
+        std_id = checker.suggest_standard(meta)
+        return {"standard_id": std_id}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ══════════════════════════════════════════════════
+# 争议项 API（用户对模型预测有异议时登记）
+# ══════════════════════════════════════════════════
+
+DISPUTES_DIR = os.path.join(os.path.dirname(__file__), "disputes")
+os.makedirs(DISPUTES_DIR, exist_ok=True)
+
+
+@app.post("/dispute/submit")
+async def dispute_submit(
+    file: UploadFile = File(None),
+    description: str = Form(""),
+    original_prediction: str = Form(""),
+    user_claim: str = Form(""),
+    original_file: str = Form(""),
+):
+    """登记争议项，可选上传证据 ZIP"""
+    import uuid
+    dispute_id = f"DSP-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    dispute_dir = os.path.join(DISPUTES_DIR, dispute_id)
+    os.makedirs(dispute_dir, exist_ok=True)
+
+    evidence_path = None
+    if file and file.filename:
+        ext = os.path.splitext(file.filename)[1].lower()
+        if ext == ".zip":
+            evidence_path = os.path.join(dispute_dir, f"evidence{ext}")
+            with open(evidence_path, "wb") as f:
+                f.write(await file.read())
+
+    # 复制当前 .nde 文件到争议目录
+    nde_copy_path = None
+    nde_filename = original_file
+    if current_file and os.path.exists(current_file):
+        nde_filename = original_file or os.path.basename(current_file)
+        nde_copy_path = os.path.join(dispute_dir, nde_filename)
+        shutil.copy2(current_file, nde_copy_path)
+
+    metadata = {
+        "dispute_id": dispute_id,
+        "timestamp": datetime.now().isoformat(),
+        "original_file": nde_filename,
+        "original_prediction": original_prediction,
+        "user_claim": user_claim,
+        "user_description": description,
+        "evidence_file": evidence_path,
+        "nde_file": nde_copy_path,
+        "status": "待仲裁",
+        "status": "待仲裁",
+    }
+    with open(os.path.join(dispute_dir, "metadata.json"), "w", encoding="utf-8") as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+    return {"success": True, "dispute_id": dispute_id, "status": "待仲裁"}
+
+
+@app.get("/dispute/list")
+def dispute_list():
+    """列出所有争议项"""
+    disputes = []
+    if not os.path.isdir(DISPUTES_DIR):
+        return {"disputes": []}
+    for dname in sorted(os.listdir(DISPUTES_DIR), reverse=True):
+        meta_path = os.path.join(DISPUTES_DIR, dname, "metadata.json")
+        if os.path.exists(meta_path):
+            with open(meta_path, "r", encoding="utf-8") as f:
+                disputes.append(json.load(f))
+    return {"disputes": disputes}
+
+
 @app.get("/chat/signal_waveform")
 def chat_signal_waveform():
     """返回当前文件的 A-Scan 全量波形数据和逐帧异常信息"""
@@ -817,13 +968,40 @@ async def chat_ask(req: dict):
         if prediction and "error" not in prediction and prediction['confidence'] > 0.6:
             system_prompt += f"""
 ## 分析规则
-1. 依据上述信号特征和模型输出来分析，给出详细结论
-2. **不要直接说出"模型预测为X类"**，而是说"信号特征与X类缺陷模式高度吻合"
-3. 必须从信号层面解释：回波特征、幅值变化、底波衰减、异常区域等
-4. 分析要详细、专业，涵盖材料参数、信号特征、缺陷判断、置信度评估
-5. 用中文回复，适当使用 Markdown 格式（标题、加粗、列表、引用等）
-6. 如果置信度低于60%，要提示"需要进一步确认"
-7. **重要：Dl=分层(Delamination)，Db=脱粘(Debonding)。不要在回复中把 Dl 和 Db 的中文名搞反！**
+1. 依据上述信号特征和模型输出进行分析，给出详细结论
+2. **直接说出模型预测结果**，例如"模型判定为**分层(Dl)**，置信度85%"，然后从信号层面解释依据
+3. **语气肯定、专业**。你是有数据支撑的分析系统，不是征求意见的助手
+4. 必须从信号层面解释：回波特征、幅值变化、底波衰减、异常区域等
+5. 分析要详细、专业，涵盖材料参数、信号特征、缺陷判断、置信度评估
+6. 用中文回复，适当使用 Markdown 格式（标题、加粗、列表、引用等）
+7. 如果置信度低于60%，要提示"需要进一步确认"
+8. **重要：Dl=分层(Delamination)，Db=脱粘(Debonding)。不要在回复中把 Dl 和 Db 的中文名搞反！**
+
+## 用户质疑时的处理规则（当用户说"不对/不是/应该是/改成"时）
+**核心原则：你是有数据支撑的检测分析系统，不是聊天机器人。模型判定是当前最佳结论，不容轻易推翻。**
+
+当用户质疑时，按以下模板回复，**直接填充具体数据**，不要自由发挥：
+
+> 我理解您的看法，但根据信号分析数据，模型判定为**【缺陷类型】**，置信度**【XX%】**，理由如下：
+> - 底波能量比：【数值】（阈值【X】，结论）
+> - 幅值衰减：【数值】（阈值【X】，结论）
+> - 连续异常帧数：【数值】（阈值【X】，结论）
+> - 【其他关键信号特征】
+>
+> 如果您坚持认为是【用户主张的缺陷类型】，请上传C扫描图像、金相照片或其他NDE方法结果，打包为ZIP文件并附上说明。系统将登记为**争议项**保留备查。在仲裁结果出来前，文件标签保持当前判定结果不变。
+
+**绝对禁止**使用的措辞：
+❌ "您说得对" / "您说得有道理"
+❌ "可能是我判断错了" / "我重新分析一下"
+❌ "也有这种可能" / "不排除您的看法"
+❌ "让我再看看" / "我再检查一下"
+❌ 任何形式的认错、让步、自我怀疑
+
+**必须做到**：
+✅ 第一句就重申模型判定结果，不绕弯子
+✅ 至少引用 2-3 个具体信号数值作为依据
+✅ 结尾明确要求上传 ZIP 证据
+✅ 语气像"有经验的检测工程师坚持自己的专业判断"
 """
         else:
             system_prompt += f"""
@@ -865,6 +1043,107 @@ async def chat_ask(req: dict):
 
 请根据以上真实数据回答用户的问题。"""
         system_prompt += dataset_block
+
+    # ── 验收标准相关查询（对话式） ──
+    acceptance_keywords = ['验收', '验收标准', '验收文件', '超标', '合格判定', '验收判定', '标准文件']
+    asks_acceptance = any(k in question for k in acceptance_keywords)
+    acceptance_ctx = ""
+
+    if asks_acceptance:
+        try:
+            checker = get_checker()
+            idx = checker.get_index()
+            if idx:
+                lines = ["\n\n## 验收标准信息\n当前系统中有以下验收标准："]
+                for s in idx:
+                    mats = "、".join(s.get("applicable_materials", []))
+                    lines.append(f"- **{s['id']}**: {s['name']}" + (f"（适用材料: {mats}）" if mats else ""))
+                acceptance_ctx = "\n".join(lines)
+
+                # 判断是否需要执行判定（用户问"依据XX标准是否超标"之类）
+                do_check = any(k in question for k in ["超标", "合格", "判定", "依据", "按", "合不合格", "过不过"])
+                target_id = None
+                if do_check:
+                    q_nospace = question.replace(" ", "")
+                    for s in idx:
+                        sid = s["id"]
+                        sid_nospace = sid.replace(" ", "")
+                        sid_num = sid.split("-")[0].split()[-1]  # "HB 7224-2020" → "7224"
+                        # 多种匹配方式：精确、无空格、标准号数字、标准名称
+                        if (sid in question or sid_nospace in q_nospace
+                            or sid_num in q_nospace
+                            or s.get("name", "") in question):
+                            target_id = sid
+                            break
+                    if not target_id and idx:
+                        target_id = idx[0].get("id")
+
+                if target_id and current_file and os.path.exists(current_file):
+                    sig = analyze_signal(current_file)
+                    meta = load_nde_meta(current_file)
+                    sf = {k: v for k, v in sig.items() if isinstance(v, (int, float))} if sig else {}
+                    sf["detected_frames"] = 64
+                    dt = (meta or {}).get("GlobalLabel", {}).get("defectType", "")
+                    res = checker.check(target_id, {
+                        "defect_type": dt,
+                        "defect_type_en": dt,
+                        "confidence": 0,
+                        "signal_features": sf,
+                        "prediction": {},
+                    })
+                    acceptance_ctx += f"\n\n## 验收判定结果（请用自然语言向用户解释）\n"
+                    acceptance_ctx += f"- 标准：{res['standard_id']} - {res['standard_name']}\n"
+                    acceptance_ctx += f"- 缺陷类型：{dt or '未知'}\n"
+                    status = "✅ 合格" if res['passed'] is True else "❌ 不合格" if res['passed'] is False else "⚠️ 无法判定"
+                    acceptance_ctx += f"- 判定：{status}\n"
+                    acceptance_ctx += f"- 理由：{res['reason']}\n"
+                    for v in res.get('violations', []):
+                        acceptance_ctx += f"  - [{v['level']}级] {v['description']}（{v['action']}）\n"
+                    for sug in res.get('suggestions', []):
+                        acceptance_ctx += f"  - 💡 {sug}\n"
+                    if res.get('needs_cscan'):
+                        acceptance_ctx += "  - ⚠ 需要 CScan 确认缺陷尺寸\n"
+        except Exception:
+            acceptance_ctx = ""
+
+    if acceptance_ctx:
+        system_prompt += acceptance_ctx
+
+    # ── 争议项查询（对话式） ──
+    dispute_keywords = ['争议', '争议项', '待仲裁', 'DSP']
+    asks_dispute = any(k in question for k in dispute_keywords)
+    dispute_ctx = ""
+    if asks_dispute:
+        try:
+            import json as _json
+            disputes = []
+            if os.path.isdir(DISPUTES_DIR):
+                for dname in sorted(os.listdir(DISPUTES_DIR), reverse=True):
+                    meta_path = os.path.join(DISPUTES_DIR, dname, "metadata.json")
+                    if os.path.exists(meta_path):
+                        with open(meta_path, "r", encoding="utf-8") as f:
+                            disputes.append(_json.load(f))
+            if disputes:
+                dispute_ctx = "\n\n以下争议项数据已按表格排列，请照原样输出各行的内容（文件名较长部分用空格分隔，换两行显示）：\n\n"
+                dispute_ctx += "| 序号 | 争议项编号 | 文件 | 原始标签 | 争议意见 | 仲裁状态 | 有C扫 | 有A扫 |\n"
+                dispute_ctx += "|------|------------|------|----------|----------|----------|-------|-------|\n"
+                for i, d in enumerate(disputes, 1):
+                    fname = d['original_file']
+                    # 按文件名规范在时间戳前断开：找到 _YYYYMMDDHHMMSS_ 位置
+                    ts_match = re.search(r'(_)(\d{14})_', fname)
+                    if ts_match:
+                        brk = ts_match.start(1)
+                        fname = fname[:brk] + ' ' + fname[brk:]
+                    has_evidence = "✅有" if d.get('evidence_file') else "❌无"
+                    has_nde = "✅有" if d.get('nde_file') else "❌无"
+                    dispute_ctx += f"|{i}|{d['dispute_id']}|{fname}|{d['original_prediction']}|{d.get('user_description','-')}|{d['status']}|{has_evidence}|{has_nde}|\n"
+            else:
+                dispute_ctx = "\n\n## 争议项\n当前没有争议项记录。"
+        except Exception:
+            dispute_ctx = "\n\n## 争议项\n查询争议项时出错。"
+
+    if dispute_ctx:
+        system_prompt += dispute_ctx
 
     # ── 调用 AI 流式返回 ──
     async def text_generator():

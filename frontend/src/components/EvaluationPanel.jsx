@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Card, Button, Select, Upload, Input, Tag, message, Spin, Collapse, Space, Segmented } from 'antd'
-import { SendOutlined, UploadOutlined, RobotOutlined, UserOutlined, DownOutlined, DownloadOutlined } from '@ant-design/icons'
+import { Button, Select, Upload, Input, Tag, message, Spin, Collapse, Segmented } from 'antd'
+import { SendOutlined, UploadOutlined, RobotOutlined, UserOutlined, DownloadOutlined } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -50,6 +50,12 @@ export default function EvaluationPanel() {
   const [reportInfo, setReportInfo] = useState(null)  // null | {loading, url, error}
   const [signalWaveform, setSignalWaveform] = useState(null)  // {bscan, abnormal_frames, ...}
 
+  // 争议项
+  const [showDisputePrompt, setShowDisputePrompt] = useState(false)
+  const [disputeInfo, setDisputeInfo] = useState(null)  // null | {loading, id, error}
+  const [disputeEvidenceFile, setDisputeEvidenceFile] = useState(null)
+  const [disputeDescription, setDisputeDescription] = useState('')
+
   const msgEndRef = useRef(null)
   const inputRef = useRef(null)
 
@@ -86,6 +92,8 @@ export default function EvaluationPanel() {
       if (res.data) {
         const metaInfo = await extractMeta(file.name)
         setSignalWaveform(null)
+        setShowDisputePrompt(false)
+        setDisputeInfo(null)
         setUploadedFile({
           name: file.name,
           size: file.size,
@@ -172,6 +180,8 @@ export default function EvaluationPanel() {
     setStreamingText('')
     setShowReportPrompt(false)
     setReportInfo(null)
+    setShowDisputePrompt(false)
+    setDisputeInfo(null)
     setSignalWaveform(null)
 
     // 构建多轮对话历史（只含文本消息，保留最近 40 条）
@@ -213,8 +223,12 @@ export default function EvaluationPanel() {
           }])
           setStreamingText('')
           setAnalyzing(false)
-          // 有文件时自动拉取 A-Scan 波形数据
-          if (uploadedFile) {
+          // 仅当问题涉及信号/波形/缺陷分析时才拉取 A-Scan 波形数据
+          const ascanKeywords = ['波形', '信号', 'ascan', 'a扫', 'a-scan', 'b扫', 'bscan', 'b-scan',
+            '缺陷', '分析', '查看', '显示', '异常', '幅值', '衰减', '底波',
+            '回波', '能量', '信噪比', 'snr', '帧', '检测结果', '评估']
+          const isAscanRelevant = ascanKeywords.some(k => question.toLowerCase().includes(k))
+          if (uploadedFile && isAscanRelevant) {
             axios.get('http://127.0.0.1:8000/chat/signal_waveform')
               .then(res => {
                 if (res.data && res.data.bscan) {
@@ -222,6 +236,17 @@ export default function EvaluationPanel() {
                 }
               })
               .catch(() => {})
+          }
+          // 检测 AI 是否要求提供争议证据
+          const disputeKeywords = ['争议项', '上传证据', '仲裁', '证据']
+          const wantsDispute = disputeKeywords.some(k => (finalText || '').includes(k))
+          if (wantsDispute && uploadedFile) {
+            setShowDisputePrompt(true)
+            setDisputeInfo(null)
+            setDisputeEvidenceFile(null)
+            setDisputeDescription('')
+          } else {
+            setShowDisputePrompt(false)
           }
         }
       )
@@ -277,6 +302,33 @@ export default function EvaluationPanel() {
     } catch (err) {
       setReportInfo({ loading: false, url: null, error: err.message })
       message.error('生成报告失败: ' + err.message)
+    }
+  }
+
+  // 提交争议项
+  const submitDispute = async () => {
+    setDisputeInfo({ loading: true, id: null, error: null })
+    try {
+      const lastMsg = messages.filter(m => m.role === 'assistant').pop()
+      const form = new FormData()
+      form.append('original_file', uploadedFile?.name || 'unknown.nde')
+      form.append('original_prediction', extractDefectType(lastMsg?.content || ''))
+      form.append('user_claim', disputeDescription.slice(0, 50))
+      form.append('description', disputeDescription)
+      if (disputeEvidenceFile) {
+        form.append('file', disputeEvidenceFile)
+      }
+      const res = await axios.post('http://127.0.0.1:8000/dispute/submit', form)
+      if (res.data.success) {
+        setDisputeInfo({ loading: false, id: res.data.dispute_id, error: null })
+        message.success(`争议项已登记：${res.data.dispute_id}`)
+      } else {
+        setDisputeInfo({ loading: false, id: null, error: res.data.error })
+        message.error('争议项登记失败')
+      }
+    } catch (err) {
+      setDisputeInfo({ loading: false, id: null, error: err.message })
+      message.error('争议项登记失败: ' + err.message)
     }
   }
 
@@ -621,6 +673,92 @@ export default function EvaluationPanel() {
               </div>
             )}
 
+            {/* 争议项证据上传 */}
+            {showDisputePrompt && !analyzing && (
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'flex-start',
+                marginBottom: 20,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <div style={{
+                    width: 32, height: 32, borderRadius: '50%',
+                    background: '#fa8c16',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: '#fff', fontSize: 14,
+                  }}>
+                    ⚖
+                  </div>
+                  <span style={{ color: '#999', fontSize: 12 }}>争议项登记</span>
+                </div>
+                <div style={{
+                  background: '#fff7e6',
+                  border: '1px solid #ffd591',
+                  borderRadius: 12,
+                  borderBottomLeftRadius: 4,
+                  padding: '16px 20px',
+                  fontSize: 14,
+                  width: '100%',
+                  maxWidth: 500,
+                }}>
+                  <div style={{ marginBottom: 10, color: '#d46b08' }}>
+                    📋 如您对模型判断有异议，请上传证据材料，系统将登记为争议项保留备查
+                  </div>
+                  <div style={{ marginBottom: 10 }}>
+                    <Upload
+                      accept=".zip"
+                      beforeUpload={(file) => { setDisputeEvidenceFile(file); return false }}
+                      showUploadList={false}
+                    >
+                      <Button icon={<UploadOutlined />} size="small">
+                        {disputeEvidenceFile ? disputeEvidenceFile.name : '选择证据 ZIP 文件'}
+                      </Button>
+                    </Upload>
+                    {disputeEvidenceFile && (
+                      <Tag closable onClose={() => setDisputeEvidenceFile(null)} style={{ marginTop: 4 }}>
+                        {disputeEvidenceFile.name}
+                      </Tag>
+                    )}
+                  </div>
+                  <div style={{ marginBottom: 10 }}>
+                    <Input.TextArea
+                      placeholder="请描述您认为的正确缺陷类型及依据…"
+                      value={disputeDescription}
+                      onChange={e => setDisputeDescription(e.target.value)}
+                      rows={3}
+                      style={{ fontSize: 13 }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <Button
+                      type="primary"
+                      size="small"
+                      loading={disputeInfo?.loading}
+                      disabled={!disputeDescription.trim()}
+                      onClick={submitDispute}
+                      style={{ background: '#d46b08', borderColor: '#d46b08' }}
+                    >
+                      提交争议项
+                    </Button>
+                    <Button size="small" onClick={() => setShowDisputePrompt(false)}>
+                      关闭
+                    </Button>
+                  </div>
+                  {disputeInfo?.id && (
+                    <div style={{ marginTop: 8, color: '#52c41a', fontSize: 13 }}>
+                      ✅ 争议项已登记，编号：<strong>{disputeInfo.id}</strong>
+                    </div>
+                  )}
+                  {disputeInfo?.error && (
+                    <div style={{ marginTop: 8, color: '#f5222d', fontSize: 13 }}>
+                      ❌ 登记失败：{disputeInfo.error}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div ref={msgEndRef} />
           </>
         )}
@@ -694,6 +832,7 @@ export default function EvaluationPanel() {
           51%, 100% { opacity: 0; }
         }
       `}</style>
+
     </div>
   )
 }

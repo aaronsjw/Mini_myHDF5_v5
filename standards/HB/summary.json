@@ -1,0 +1,177 @@
+{
+  "standard_id": "HB 7224-2020",
+  "name": "复合材料构件通用技术条件",
+  "source_file": "HB 7224-2020_复合材料构件通用技术条件.pdf",
+  "effective_date": "2020-08-01",
+  "default_grade": "C",
+  "grade_info": "质量控制等级分为 A/B/C 三级，工程图样未明确规定时按 C 级处理",
+  "defect_criteria": [
+    {
+      "defect_type": "裂纹",
+      "defect_type_alias": ["Crack", "Cr"],
+      "conditions": [
+        {
+          "level": "A",
+          "description": "层压板结构中出现裂纹，直接判定为不合格",
+          "rule": "consecutive_abnormal >= 5",
+          "action": "不合格"
+        }
+      ],
+      "needs_cscan": false,
+      "note": "裂纹为致命缺陷，一经发现直接不合格"
+    },
+    {
+      "defect_type": "分层",
+      "defect_type_alias": ["Delamination", "Dl"],
+      "conditions": [
+        {
+          "level": "B",
+          "description": "AScan 信号异常确认存在分层，需 CScan 测量投影尺寸判定",
+          "rule": "amp_attenuation >= 30",
+          "action": "可疑，需补充检测"
+        },
+        {
+          "level": "C",
+          "description": "底波能量比异常，疑似分层信号",
+          "rule": "backwall_ratio < 0.3",
+          "action": "可疑，需补充检测"
+        }
+      ],
+      "needs_cscan": true,
+      "cscan_criteria": "Z=(X+Y)/2，A级 Z≤10mm、B级 Z≤13mm、C级 Z≤19mm 为合格；两缺陷边缘距离≥100mm",
+      "cscan_action": "不合格",
+      "note": "分层超对应等级规定尺寸为不合格（表7），尺寸判定需 CScan"
+    },
+    {
+      "defect_type": "孔隙",
+      "defect_type_alias": ["Porosity", "Po", "密集空隙", "DenseVoid"],
+      "conditions": [
+        {
+          "level": "A",
+          "description": "超声波衰减严重：10MHz 衰减率 ≥ 70%，等效为 AScan 高衰减",
+          "rule": "amp_attenuation >= 50 or backwall_ratio < 0.15",
+          "action": "不合格"
+        },
+        {
+          "level": "B",
+          "description": "超声波中等衰减：5MHz 衰减率 ≥ 50%，需确认面积占比",
+          "rule": "amp_attenuation >= 35 or backwall_ratio < 0.2",
+          "action": "可疑，需补充检测"
+        },
+        {
+          "level": "C",
+          "description": "轻微衰减或孔隙率异常",
+          "rule": "porosity_estimate > 2",
+          "action": "可疑，需补充检测"
+        }
+      ],
+      "needs_cscan": true,
+      "cscan_criteria": "累积缺陷面积占比：A 级≤10%、B 级≤15%、C 级≤25%（表6）；超出为不合格",
+      "cscan_action": "不合格",
+      "note": "密集空隙以超声波衰减率判定（10MHz/70%、5MHz/50%、2.5MHz/25%），面积占比需 CScan"
+    },
+    {
+      "defect_type": "夹杂",
+      "defect_type_alias": ["Inclusion", "In", "夹杂物"],
+      "conditions": [
+        {
+          "level": "B",
+          "description": "AScan 波形异常，疑似夹杂物，需 CScan 测量尺寸",
+          "rule": "waveform_corr < 0.7 and amp_attenuation >= 20",
+          "action": "可疑，需补充检测"
+        }
+      ],
+      "needs_cscan": true,
+      "cscan_criteria": "Z=(X+Y)/2，A 级 Z≤10mm、B 级 Z≤13mm、C 级 Z≤19mm 为合格；两缺陷边缘距离≥100mm",
+      "cscan_action": "不合格"
+    },
+    {
+      "defect_type": "脱粘",
+      "defect_type_alias": ["Debonding", "Db"],
+      "conditions": [
+        {
+          "level": "A",
+          "description": "底波完全消失，脱粘特征明显",
+          "rule": "backwall_ratio < 0.1",
+          "action": "不合格"
+        },
+        {
+          "level": "B",
+          "description": "底波能量比 < 0.2 且信噪比低",
+          "rule": "backwall_ratio < 0.2 and snr_db < 10",
+          "action": "不合格"
+        }
+      ],
+      "needs_cscan": true,
+      "cscan_criteria": "胶接空隙和脱粘按表5 Z值尺寸判定；密集空隙按表6 面积占比判定",
+      "cscan_action": "不合格",
+      "note": "板/板、板/芯胶接件脱粘需 CScan 确认尺寸（表8）"
+    },
+    {
+      "defect_type": "气孔",
+      "defect_type_alias": ["Void", "Vo"],
+      "conditions": [
+        {
+          "level": "B",
+          "description": "单帧幅值异常且回波位置显著偏移",
+          "rule": "peak_shift > 20 and waveform_corr < 0.8",
+          "action": "可疑，需补充检测"
+        }
+      ],
+      "needs_cscan": true,
+      "cscan_criteria": "按表5 Z值尺寸判定：A级≤10mm、B级≤13mm、C级≤19mm",
+      "cscan_action": "不合格"
+    },
+    {
+      "defect_type": "富树脂",
+      "defect_type_alias": ["ResinRich", "Rs"],
+      "conditions": [
+        {
+          "level": "C",
+          "description": "信号幅值偏低，可能存在富树脂区",
+          "rule": "mean_amplitude < 50 and amp_attenuation < 20",
+          "action": "可疑，需补充检测"
+        }
+      ],
+      "needs_cscan": true,
+      "cscan_criteria": "X 射线成像呈现亮光区；面积超表6 要求为不合格",
+      "cscan_action": "不合格",
+      "note": "富树脂区需 X 射线成像确认，面积占比按表6 执行"
+    }
+  ],
+  "complementary_methods": {
+    "分层": ["超声 CScan", "激光剪切散斑"],
+    "脱粘": ["超声 CScan", "红外热成像 IRT"],
+    "孔隙": ["工业 CT", "超声 CScan"],
+    "夹杂": ["工业 CT", "X 射线成像"],
+    "气孔": ["工业 CT", "超声 CScan"],
+    "富树脂": ["X 射线成像"],
+    "裂纹": ["X 射线成像", "工业 CT"]
+  },
+  "general_rules": [
+    {
+      "condition": "质量控制等级由工程图样或技术文件规定，未明确时按 C 级处理",
+      "action": "按 C 级执行"
+    },
+    {
+      "condition": "多种缺陷同时存在时，按最严重缺陷定级",
+      "action": "取最高等级"
+    },
+    {
+      "condition": "检测系统应至少可检出直径 6mm 的缺陷（A 级）、10mm（B 级）、12mm（C 级）",
+      "action": "确保检测灵敏度达标"
+    },
+    {
+      "condition": "两个缺陷区域边缘最小距离不得小于 100mm，不足时视为同一缺陷区域合并计算",
+      "action": "合并计算"
+    },
+    {
+      "condition": "层压板 L/W ≥ 10：长度方向任意 500mm 范围内最大累积缺陷面积占比，A 级≤10%、B 级≤15%、C 级≤25%",
+      "action": "按面积占比判定"
+    },
+    {
+      "condition": "层压板 L/W < 10：任意 125mm×125mm 范围内最大累积缺陷面积占比，A 级≤10%、B 级≤15%、C 级≤25%",
+      "action": "按面积占比判定"
+    }
+  ]
+}
