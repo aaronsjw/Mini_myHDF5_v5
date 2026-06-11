@@ -56,7 +56,7 @@ export default function InspectPanel({
         {info.type}
       </Tag>
 
-      <div style={{ marginTop:15 }}>
+      <div style={{ marginTop:15, height: 'calc(100vh - 220px)', overflow: 'auto' }}>
 
       {
         editableJson?.defectType !== undefined && (

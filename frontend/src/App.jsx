@@ -50,6 +50,7 @@ export default function App() {
     const [activeModule, setActiveModule] = useState('labeling')
     const [frameLabels, setFrameLabels] = useState(null)
     const [yAxisRange, setYAxisRange] = useState([-2000, 2000])
+    const [datasetPath, setDatasetPath] = useState('')
 
     const heatmapHeight = heatmap
         ? Math.max(300, Math.min(heatmap.length * 6, 800))
@@ -227,7 +228,7 @@ export default function App() {
                     </div>
 
                     {/* Collapsible Panels */}
-                    <div style={{ flex: 1, overflow: 'auto' }}>
+                    <div style={{ flex: 1, overflow: 'hidden' }}>
                         <Collapse
                             defaultActiveKey={['labeling']}
                             activeKey={[activeModule]}
@@ -239,7 +240,7 @@ export default function App() {
                                     key: 'labeling',
                                     label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>数据标注</span>,
                                     children: (
-                                        <div style={{ padding: '0 8px 6px', background: '#666', borderRadius: 6 }}>
+                                        <div style={{ padding: '8px', background: '#666', borderRadius: 6, display: 'flex', flexDirection: 'column', maxHeight: 'calc(100vh - 180px)' }}>
                                             {/* Current File */}
                                             {currentFile && (
                                                 <div style={{ marginBottom: 6, padding: '6px 0' }}>
@@ -258,13 +259,13 @@ export default function App() {
                                                     style={{ display: 'block' }}
                                                 >
                                                     <Button type="primary" block size="small" style={{ height: 30 }}>
-                                                        Upload NDE / HDF5 / CSV
+                                                        Upload NDE/CSV/ZIP
                                                     </Button>
                                                 </Upload>
                                             </div>
 
                                             {/* Dataset Tree */}
-                                            <div style={{ marginBottom: 6 }}>
+                                            <div style={{ flex: 1, overflow: 'auto', marginBottom: 6 }}>
                                                 <Tree
                                                     treeData={treeData}
                                                     onSelect={onSelect}
@@ -275,11 +276,11 @@ export default function App() {
                                             </div>
 
                                             {/* Batch Label */}
-                                            <div>
+                                            <div style={{ display: 'flex', gap: 6 }}>
                                                 <Select
                                                     value={batchDefectType}
                                                     onChange={setBatchDefectType}
-                                                    style={{ width: '100%', marginBottom: 6, height: 30 }}
+                                                    style={{ flex: 1, height: 30 }}
                                                     size="small"
                                                     options={[
                                                         { value: 'OK', label: 'OK' },
@@ -295,9 +296,8 @@ export default function App() {
                                                 />
                                                 <Button
                                                     type="primary"
-                                                    block
                                                     size="small"
-                                                    style={{ height: 30 }}
+                                                    style={{ height: 30, width: 130, flexShrink: 0 }}
                                                     onClick={async () => {
                                                         try {
                                                             const form = new FormData()
@@ -328,8 +328,207 @@ export default function App() {
                                     key: 'dataset',
                                     label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>数据库</span>,
                                     children: (
-                                        <div style={{ padding: '6px 12px', color: '#666', fontSize: 13, background: '#666', borderRadius: 6 }}>
-                                            (Coming soon)
+                                        <div style={{ padding: '4px 0', background: '#666', borderRadius: 6 }}>
+                                            {/* 超声检测 */}
+                                            <div style={{ marginBottom: 4 }}>
+                                                <div
+                                                    onClick={() => { setActiveModule('dataset'); setDatasetPath('ultrasonic/ascan') }}
+                                                    style={{
+                                                        padding: '6px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 'bold',
+                                                        color: datasetPath.startsWith('ultrasonic') ? '#1890ff' : '#ccc',
+                                                        borderRadius: 4,
+                                                    }}
+                                                >
+                                                    {datasetPath.startsWith('ultrasonic') ? '▾' : '▸'} 超声检测
+                                                </div>
+                                                {datasetPath.startsWith('ultrasonic') && (
+                                                    <div style={{ paddingLeft: 24 }}>
+                                                        <div
+                                                            onClick={() => { setActiveModule('dataset'); setDatasetPath('ultrasonic/ascan') }}
+                                                            style={{
+                                                                padding: '6px 12px', cursor: 'pointer', fontSize: 13,
+                                                                color: datasetPath === 'ultrasonic/ascan' ? '#1890ff' : '#fff',
+                                                                background: datasetPath === 'ultrasonic/ascan' ? 'rgba(24,144,255,0.15)' : 'transparent',
+                                                                borderRadius: 4,
+                                                            }}
+                                                        >
+                                                             超声 AScan 数据库
+                                                        </div>
+                                                        <div
+                                                            onClick={() => { setActiveModule('dataset'); setDatasetPath('ultrasonic/cscan') }}
+                                                            style={{
+                                                                padding: '6px 12px', cursor: 'pointer', fontSize: 13,
+                                                                color: datasetPath === 'ultrasonic/cscan' ? '#1890ff' : '#fff',
+                                                                background: datasetPath === 'ultrasonic/cscan' ? 'rgba(24,144,255,0.15)' : 'transparent',
+                                                                borderRadius: 4,
+                                                            }}
+                                                        >
+                                                             超声 CScan 数据库
+                                                        </div>
+                                                        <div
+                                                            onClick={() => { setActiveModule('dataset'); setDatasetPath('ultrasonic/paut') }}
+                                                            style={{
+                                                                padding: '6px 12px', cursor: 'pointer', fontSize: 13,
+                                                                color: datasetPath === 'ultrasonic/paut' ? '#1890ff' : '#fff',
+                                                                background: datasetPath === 'ultrasonic/paut' ? 'rgba(24,144,255,0.15)' : 'transparent',
+                                                                borderRadius: 4,
+                                                            }}
+                                                        >
+                                                             超声相控阵 PAUT
+                                                        </div>
+                                                        <div
+                                                            onClick={() => { setActiveModule('dataset'); setDatasetPath('ultrasonic/guidedwave') }}
+                                                            style={{
+                                                                padding: '6px 12px', cursor: 'pointer', fontSize: 13,
+                                                                color: datasetPath === 'ultrasonic/guidedwave' ? '#1890ff' : '#fff',
+                                                                background: datasetPath === 'ultrasonic/guidedwave' ? 'rgba(24,144,255,0.15)' : 'transparent',
+                                                                borderRadius: 4,
+                                                            }}
+                                                        >
+                                                             导波 GW
+                                                        </div>
+                                                        <div
+                                                            onClick={() => { setActiveModule('dataset'); setDatasetPath('ultrasonic/ae') }}
+                                                            style={{
+                                                                padding: '6px 12px', cursor: 'pointer', fontSize: 13,
+                                                                color: datasetPath === 'ultrasonic/ae' ? '#1890ff' : '#fff',
+                                                                background: datasetPath === 'ultrasonic/ae' ? 'rgba(24,144,255,0.15)' : 'transparent',
+                                                                borderRadius: 4,
+                                                            }}
+                                                        >
+                                                             声发射 AE
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            {/* 射线检测 */}
+                                            <div style={{ marginBottom: 4 }}>
+                                                <div
+                                                    onClick={() => { setActiveModule('dataset'); setDatasetPath('radiography/dr') }}
+                                                    style={{
+                                                        padding: '6px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 'bold',
+                                                        color: datasetPath.startsWith('radiography') ? '#1890ff' : '#ccc',
+                                                        borderRadius: 4,
+                                                    }}
+                                                >
+                                                    {datasetPath.startsWith('radiography') ? '▾' : '▸'} 射线检测
+                                                </div>
+                                                {datasetPath.startsWith('radiography') && (
+                                                    <div style={{ paddingLeft: 24 }}>
+                                                        <div
+                                                            onClick={() => { setActiveModule('dataset'); setDatasetPath('radiography/dr') }}
+                                                            style={{
+                                                                padding: '6px 12px', cursor: 'pointer', fontSize: 13,
+                                                                color: datasetPath === 'radiography/dr' ? '#1890ff' : '#fff',
+                                                                background: datasetPath === 'radiography/dr' ? 'rgba(24,144,255,0.15)' : 'transparent',
+                                                                borderRadius: 4,
+                                                            }}
+                                                        >
+                                                             数字射线 DR
+                                                        </div>
+                                                        <div
+                                                            onClick={() => { setActiveModule('dataset'); setDatasetPath('radiography/ict') }}
+                                                            style={{
+                                                                padding: '6px 12px', cursor: 'pointer', fontSize: 13,
+                                                                color: datasetPath === 'radiography/ict' ? '#1890ff' : '#fff',
+                                                                background: datasetPath === 'radiography/ict' ? 'rgba(24,144,255,0.15)' : 'transparent',
+                                                                borderRadius: 4,
+                                                            }}
+                                                        >
+                                                             工业 CT
+                                                        </div>
+                                                        <div
+                                                            onClick={() => { setActiveModule('dataset'); setDatasetPath('radiography/terahertz') }}
+                                                            style={{
+                                                                padding: '6px 12px', cursor: 'pointer', fontSize: 13,
+                                                                color: datasetPath === 'radiography/terahertz' ? '#1890ff' : '#fff',
+                                                                background: datasetPath === 'radiography/terahertz' ? 'rgba(24,144,255,0.15)' : 'transparent',
+                                                                borderRadius: 4,
+                                                            }}
+                                                        >
+                                                             太赫兹
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            {/* 光学检测 */}
+                                            <div style={{ marginBottom: 4 }}>
+                                                <div
+                                                    onClick={() => { setActiveModule('dataset'); setDatasetPath('optical/vt') }}
+                                                    style={{
+                                                        padding: '6px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 'bold',
+                                                        color: datasetPath.startsWith('optical') ? '#1890ff' : '#ccc',
+                                                        borderRadius: 4,
+                                                    }}
+                                                >
+                                                    {datasetPath.startsWith('optical') ? '▾' : '▸'} 光学检测
+                                                </div>
+                                                {datasetPath.startsWith('optical') && (
+                                                    <div style={{ paddingLeft: 24 }}>
+                                                        <div
+                                                            onClick={() => { setActiveModule('dataset'); setDatasetPath('optical/vt') }}
+                                                            style={{
+                                                                padding: '6px 12px', cursor: 'pointer', fontSize: 13,
+                                                                color: datasetPath === 'optical/vt' ? '#1890ff' : '#fff',
+                                                                background: datasetPath === 'optical/vt' ? 'rgba(24,144,255,0.15)' : 'transparent',
+                                                                borderRadius: 4,
+                                                            }}
+                                                        >
+                                                             内窥镜 VT
+                                                        </div>
+                                                        <div
+                                                            onClick={() => { setActiveModule('dataset'); setDatasetPath('optical/irt') }}
+                                                            style={{
+                                                                padding: '6px 12px', cursor: 'pointer', fontSize: 13,
+                                                                color: datasetPath === 'optical/irt' ? '#1890ff' : '#fff',
+                                                                background: datasetPath === 'optical/irt' ? 'rgba(24,144,255,0.15)' : 'transparent',
+                                                                borderRadius: 4,
+                                                            }}
+                                                        >
+                                                             红外热成像 IRT
+                                                        </div>
+                                                        <div
+                                                            onClick={() => { setActiveModule('dataset'); setDatasetPath('optical/shearography') }}
+                                                            style={{
+                                                                padding: '6px 12px', cursor: 'pointer', fontSize: 13,
+                                                                color: datasetPath === 'optical/shearography' ? '#1890ff' : '#fff',
+                                                                background: datasetPath === 'optical/shearography' ? 'rgba(24,144,255,0.15)' : 'transparent',
+                                                                borderRadius: 4,
+                                                            }}
+                                                        >
+                                                             激光剪切散斑
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            {/* 电磁检测 */}
+                                            <div style={{ marginBottom: 4 }}>
+                                                <div
+                                                    onClick={() => { setActiveModule('dataset'); setDatasetPath('electromagnetic/et') }}
+                                                    style={{
+                                                        padding: '6px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 'bold',
+                                                        color: datasetPath.startsWith('electromagnetic') ? '#1890ff' : '#ccc',
+                                                        borderRadius: 4,
+                                                    }}
+                                                >
+                                                    {datasetPath.startsWith('electromagnetic') ? '▾' : '▸'} 电磁检测
+                                                </div>
+                                                {datasetPath.startsWith('electromagnetic') && (
+                                                    <div style={{ paddingLeft: 24 }}>
+                                                        <div
+                                                            onClick={() => { setActiveModule('dataset'); setDatasetPath('electromagnetic/et') }}
+                                                            style={{
+                                                                padding: '6px 12px', cursor: 'pointer', fontSize: 13,
+                                                                color: datasetPath === 'electromagnetic/et' ? '#1890ff' : '#fff',
+                                                                background: datasetPath === 'electromagnetic/et' ? 'rgba(24,144,255,0.15)' : 'transparent',
+                                                                borderRadius: 4,
+                                                            }}
+                                                        >
+                                                             涡流 ET
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
                                     )
                                 },
@@ -388,7 +587,28 @@ export default function App() {
                     <TrainingPanel />
                 </div>
                 <div style={{ height: '100%', overflow: 'auto', display: activeModule === 'dataset' ? 'block' : 'none' }}>
-                    <DatabaseOverview />
+                    {(() => {
+                        if (datasetPath === 'ultrasonic/ascan') return <DatabaseOverview />
+                        const placeholderMap = {
+                            'ultrasonic/cscan': '超声 CScan 数据库（待开发）',
+                            'ultrasonic/paut': '超声相控阵 PAUT（待开发）',
+                            'ultrasonic/guidedwave': '导波 GW（待开发）',
+                            'ultrasonic/ae': '声发射 AE（待开发）',
+                            'radiography/dr': '数字射线 DR（待开发）',
+                            'radiography/ict': '工业 CT（待开发）',
+                            'radiography/terahertz': '太赫兹（待开发）',
+                            'optical/vt': '内窥镜 VT（待开发）',
+                            'optical/irt': '红外热成像 IRT（待开发）',
+                            'optical/shearography': '激光剪切散斑（待开发）',
+                            'electromagnetic/et': '涡流 ET（待开发）',
+                        }
+                        const msg = placeholderMap[datasetPath] || '请选择子类'
+                        return (
+                            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#999', fontSize: 16 }}>
+                                {msg}
+                            </div>
+                        )
+                    })()}
                 </div>
                 <div style={{ height: '100%', overflow: 'auto', display: activeModule === 'test' ? 'block' : 'none' }}>
                     <TestingPanel />

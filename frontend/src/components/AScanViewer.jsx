@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import {
   Card,
   Slider,
@@ -67,6 +67,31 @@ export default function AScanViewer({
       setWave(frames[idx])
     }
   }
+
+  // 键盘快捷键：左右键切换帧，数字键标注
+  useEffect(() => {
+    const handleKeyDown = e => {
+      // 如果在输入框中则不处理
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        updateFrame(Math.max(frameIndex - 1, 0))
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        updateFrame(Math.min(frameIndex + 1, frames.length - 1))
+      } else if (e.key >= '0' && e.key <= '9') {
+        const num = parseInt(e.key)
+        // 检查该数字是否对应一个有效的 label
+        const label = LABEL_OPTIONS.find(opt => opt.value === num)
+        if (label && effectiveLabels) {
+          updateLabel(frameIndex, num)
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [frameIndex, frames, effectiveLabels])
 
   return (
 
