@@ -37,7 +37,7 @@ export default function App() {
     const [colorMap, setColorMap] = useState('Greys')
 
     const [playing, setPlaying] = useState(false)
-    const [playSpeed, setPlaySpeed] = useState(100)
+    const [playSpeed, setPlaySpeed] = useState(80)
     const playTimer = useRef(null)
 
     const [xDim, setXDim] = useState('D2')

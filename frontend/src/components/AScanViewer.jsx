@@ -51,6 +51,11 @@ export default function AScanViewer({
   const [localLabels, setLocalLabels] = useState(null)
   const effectiveLabels = labels || localLabels
 
+  // 自动标注状态
+  const [autoLabelData, setAutoLabelData] = useState(null)
+  const [autoLabelLoading, setAutoLabelLoading] = useState(false)
+  const isAutoOk = autoLabelData?.suggestions?.find(s => s.frame === frameIndex)?.status === "auto_ok"
+
   // 更新标签（同时更新本地状态和后端）
   const updateLabel = (idx, val) => {
     setLocalLabels(prev => {
@@ -58,6 +63,18 @@ export default function AScanViewer({
       next[idx] = val
       return next
     })
+    // 同步更新 autoLabelData 中的标记
+    if (autoLabelData) {
+      setAutoLabelData(prev => {
+        if (!prev) return prev
+        const newSug = prev.suggestions.map(s =>
+          s.frame === idx
+            ? { ...s, auto_label: val, status: val === 0 ? "manual_ok" : "manual_defect" }
+            : s
+        )
+        return { ...prev, suggestions: newSug }
+      })
+    }
     if (onLabelChange) onLabelChange(idx, val)
   }
 
@@ -68,21 +85,59 @@ export default function AScanViewer({
     }
   }
 
+  // 自动标注：以当前帧为基准（必须是好区 0），对其他帧做相似度匹配
+  const autoLabelFrames = async () => {
+    const currentLabel = effectiveLabels?.[frameIndex]
+    if (currentLabel === undefined || currentLabel === -1) {
+      alert('请先将当前帧标注为「无缺陷」(0)，再进行自动标注')
+      return
+    }
+    if (currentLabel !== 0) {
+      alert('自动标注必须以「无缺陷」帧为基准，当前帧不是无缺陷')
+      return
+    }
+    setAutoLabelLoading(true)
+    try {
+      const res = await fetch('http://127.0.0.1:8000/auto_label_frames', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ok_frame_index: frameIndex, similarity_threshold: 0.85 }),
+      })
+      const data = await res.json()
+      if (data.error) {
+        alert('自动标注失败: ' + data.error)
+        setAutoLabelLoading(false)
+        return
+      }
+      setAutoLabelData(data)
+      setLocalLabels(prev => {
+        const next = prev ? [...prev] : new Array(frames?.length || 64).fill(-1)
+        data.suggestions.forEach(s => {
+          if (s.auto_label === 0) next[s.frame] = 0
+        })
+        return next
+      })
+      // 同步到父组件，避免切换视图后丢失
+      data.suggestions.forEach(s => {
+        if (s.auto_label === 0 && onLabelChange) onLabelChange(s.frame, 0)
+      })
+    } catch (err) {
+      alert('自动标注请求失败: ' + err.message)
+    }
+    setAutoLabelLoading(false)
+  }
+
   // 键盘快捷键：左右键切换帧，数字键标注
   useEffect(() => {
     const handleKeyDown = e => {
-      // 如果在输入框中则不处理
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
-
-      if (e.key === 'ArrowLeft') {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        // 焦点在 Slider 上时，让 Slider 原生处理（否则冲突跳两帧）
+        if (document.activeElement?.closest('.ant-slider')) return
         e.preventDefault()
-        updateFrame(Math.max(frameIndex - 1, 0))
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault()
-        updateFrame(Math.min(frameIndex + 1, frames.length - 1))
+        const dir = e.key === 'ArrowLeft' ? -1 : 1
+        updateFrame(Math.min(Math.max(frameIndex + dir, 0), frames.length - 1))
       } else if (e.key >= '0' && e.key <= '9') {
         const num = parseInt(e.key)
-        // 检查该数字是否对应一个有效的 label
         const label = LABEL_OPTIONS.find(opt => opt.value === num)
         if (label && effectiveLabels) {
           updateLabel(frameIndex, num)
@@ -140,15 +195,45 @@ export default function AScanViewer({
             onChange={updateFrame}
             style={{ marginTop: wave.length > 0 ? 16 : 0 }}
             marks={(() => {
-              if (!effectiveLabels) return {}
               const m = {}
-              effectiveLabels.forEach((v, i) => {
-                if (v === 0) m[i] = <span style={{ fontSize: 16, lineHeight: '14px', color: '#52c41a' }}>●</span>
-                else if (v > 0) m[i] = <span style={{ fontSize: 16, lineHeight: '14px', color: '#f5222d' }}>●</span>
-              })
+              if (autoLabelData?.suggestions) {
+                autoLabelData.suggestions.forEach(s => {
+                  if (s.status === "reference")
+                    m[s.frame] = <span style={{ fontSize: 16, lineHeight: '14px', color: '#1890ff' }}>★</span>
+                  else if (s.status === "auto_ok" || s.status === "manual_ok")
+                    m[s.frame] = <span style={{ fontSize: 16, lineHeight: '14px', color: '#52c41a' }}>●</span>
+                  else if (s.status === "manual_defect")
+                    m[s.frame] = <span style={{ fontSize: 16, lineHeight: '14px', color: '#f5222d' }}>●</span>
+                  else if (s.status === "pending")
+                    m[s.frame] = <span style={{ fontSize: 16, lineHeight: '14px', color: '#fa8c16' }}>○</span>
+                })
+                return m
+              }
+              if (effectiveLabels) {
+                effectiveLabels.forEach((v, i) => {
+                  if (v === 0) m[i] = <span style={{ fontSize: 16, lineHeight: '14px', color: '#52c41a' }}>●</span>
+                  else if (v > 0) m[i] = <span style={{ fontSize: 16, lineHeight: '14px', color: '#f5222d' }}>●</span>
+                })
+                if (Object.keys(m).length > 0) return m
+              }
+              for (let i = 0; i < frames.length; i++) {
+                m[i] = <span style={{ fontSize: 12, lineHeight: '14px', color: '#d9d9d9' }}>●</span>
+              }
               return m
             })()}
           />
+          <div style={{ marginTop: 8, fontSize: 12, color: '#666', display: 'flex', gap: 16, justifyContent: 'center' }}>
+            {autoLabelData ? (
+              <>
+                <span><span style={{ color: '#1890ff' }}>★</span> 参考帧</span>
+                <span><span style={{ color: '#52c41a' }}>●</span> 自动标注 OK</span>
+                <span><span style={{ color: '#fa8c16' }}>○</span> 待人工补标</span>
+                <span style={{ color: '#999' }}>| 操作：选好区→按0→点「自动标注」→补剩余帧</span>
+              </>
+            ) : (
+              <span style={{ color: '#999' }}>操作：选一帧好区，按数字键 0 标注，再点击「自动标注」</span>
+            )}
+          </div>
 
           <div
             style={{
@@ -216,7 +301,7 @@ export default function AScanViewer({
             />
 
             {effectiveLabels && effectiveLabels.length > 0 && (
-              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div data-label-toolbar style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Tag color="blue">
                   {frameIndex + 1}
                   /
@@ -243,6 +328,20 @@ export default function AScanViewer({
                     </Radio.Button>
                   ))}
                 </Radio.Group><span style={{ width: 24 }} />
+                {/* 自动标注按钮 */}
+                <Button
+                  size="small"
+                  loading={autoLabelLoading}
+                  onClick={autoLabelFrames}
+                  style={{ borderColor: '#1890ff', color: '#1890ff' }}
+                >
+                  自动标注
+                </Button>
+                {autoLabelData && (
+                  <Tag color="orange">
+                    待补: {autoLabelData.suggestions.filter(s => s.status === "pending").length}帧
+                  </Tag>
+                )}
                 <Button
                   type="primary"
                   size="small"

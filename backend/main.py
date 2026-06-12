@@ -699,6 +699,98 @@ def label_options():
 
 
 # ══════════════════════════════════════════════════
+# 自动标注 API
+# ══════════════════════════════════════════════════
+
+@app.post("/auto_label_frames")
+def auto_label_frames(req: dict):
+    """
+    自动标注：以用户标记的 OK 帧为基准，对其他帧进行相似性判断。
+    相似度 = 0.5×相关系数 + 0.15×均值差异 + 0.2×能量比 + 0.15×标准差比
+    """
+    global current_file
+    if not current_file or not os.path.exists(current_file):
+        return {"error": "没有已上传的文件"}
+
+    ok_idx = req.get("ok_frame_index")
+    if ok_idx is None:
+        return {"error": "缺少 ok_frame_index"}
+
+    threshold = req.get("similarity_threshold", 0.85)
+
+    try:
+        waveform = analyze_waveform_per_frame(current_file)
+        bscan = waveform["bscan"]
+        n_frames = len(bscan)
+
+        if ok_idx < 0 or ok_idx >= n_frames:
+            return {"error": f"ok_frame_index 超出范围 (0-{n_frames-1})"}
+
+        ok_wave = np.array(bscan[ok_idx])
+        suggestions = []
+
+        for i in range(n_frames):
+            wave_i = np.array(bscan[i])
+
+            # 相关系数
+            if np.std(wave_i) > 1e-8 and np.std(ok_wave) > 1e-8:
+                corr = float(np.corrcoef(ok_wave, wave_i)[0, 1])
+            else:
+                corr = 0.0
+
+            # 特征差异
+            def _feat(w):
+                return {"mean": float(np.mean(w)), "std": float(np.std(w)), "energy": float(np.sum(w**2))}
+
+            f_ok = _feat(ok_wave)
+            f_i = _feat(wave_i)
+
+            mean_diff = 1 - min(abs(f_i["mean"] - f_ok["mean"]) / (abs(f_ok["mean"]) + 1e-6), 1)
+            energy_ratio = min(f_i["energy"] / (f_ok["energy"] + 1e-6), f_ok["energy"] / (f_i["energy"] + 1e-6))
+            std_ratio = min(f_i["std"] / (f_ok["std"] + 1e-6), f_ok["std"] / (f_i["std"] + 1e-6))
+
+            similarity = corr * 0.5 + mean_diff * 0.15 + energy_ratio * 0.2 + std_ratio * 0.15
+            similarity = max(0, min(1, similarity))
+
+            if i == ok_idx:
+                auto_label = 0
+                status = "reference"
+            elif similarity >= threshold:
+                auto_label = 0
+                status = "auto_ok"
+            else:
+                auto_label = -1
+                status = "pending"
+
+            suggestions.append({"frame": i, "similarity": round(similarity, 4), "auto_label": auto_label, "status": status})
+
+        auto_labels = [s["auto_label"] for s in suggestions]
+
+        # 自动保存到文件
+        try:
+            with h5py.File(current_file, "r+") as f:
+                ds, n = _ensure_frame_labels(f)
+                for s in suggestions:
+                    if s["auto_label"] == 0:
+                        ds[s["frame"]] = 0
+        except Exception:
+            pass
+
+        return {
+            "auto_labels": auto_labels,
+            "suggestions": suggestions,
+            "n_frames": n_frames,
+            "ok_frame_index": ok_idx,
+            "threshold": threshold,
+            "auto_ok_count": sum(1 for s in suggestions if s["status"] == "auto_ok"),
+            "pending_count": sum(1 for s in suggestions if s["status"] == "pending"),
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ══════════════════════════════════════════════════
 # 验收判定 API
 # ══════════════════════════════════════════════════
 
