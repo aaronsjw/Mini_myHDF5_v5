@@ -837,7 +837,11 @@ def preview_dataset(base_dir=None):
     if not os.path.isdir(base_dir):
         return {"error": "dataset directory not found"}
 
-    result = {"by_defect": {}, "total_files": 0, "n_features": None, "n_features_total": None}
+    result = {
+        "by_defect": {}, "total_files": 0,
+        "n_features": None, "n_features_total": None,
+        "by_material": {},     # 材料分布（纤维牌号/基体牌号）
+    }
     for dd in sorted(os.listdir(base_dir)):
         dir_path = os.path.join(base_dir, dd)
         if not os.path.isdir(dir_path):
@@ -865,6 +869,17 @@ def preview_dataset(base_dir=None):
             "label": dd
         }
         result["total_files"] += len(nde_files)
+
+        # ── 按文件名解析材料分布 ──
+        for fname in nde_files:
+            m = FILENAME_PATTERN.match(fname)
+            if m:
+                tail = m.group(8)
+                tail_parts = tail.split("_")
+                fiber_grade = tail_parts[0] if len(tail_parts) >= 1 else "?"
+                matrix_grade = tail_parts[1] if len(tail_parts) >= 2 else "?"
+                mat_key = f"{fiber_grade}/{matrix_grade}"
+                result["by_material"][mat_key] = result["by_material"].get(mat_key, 0) + 1
 
     return result
 

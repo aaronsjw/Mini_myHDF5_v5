@@ -15,6 +15,19 @@ const DEFECT_FULL_NAMES = {
   Cp: '耦合不良', Uc: '不可识别'
 }
 
+const FIBER_COLORS = {
+  CF: '#1890ff', GF: '#52c41a', GFAF: '#fa8c16', BF: '#f5222d',
+  AF: '#722ed1',
+}
+const FIBER_NAMES = {
+  CF: '碳纤维(CF)', GF: '玻璃纤维(GF)', GFAF: '玻纤/芳纶(GFAF)',
+  BF: '硼纤维(BF)', AF: '芳纶纤维(AF)',
+}
+const FIBER_GRADE_COLORS = [
+  '#1890ff', '#52c41a', '#fa8c16', '#f5222d', '#722ed1',
+  '#13c2c2', '#2f54eb', '#eb2f96', '#fadb14', '#fa541c',
+]
+
 const MODEL_OPTIONS = [
   { value: 'random_forest', label: 'RandomForest（随机森林）', group: '传统机器学习' },
   { value: 'deep_cnn_lstm_transformer', label: 'CNN + LSTM + Transformer', group: '深度学习' },
@@ -121,24 +134,44 @@ export default function TrainingPanel() {
       })
   }
 
-  // ── 饼图 ──
-  const pieOption = preview ? {
+  // ── 缺陷分布饼图 ──
+  const defectPieOption = preview ? {
     tooltip: { trigger: 'item', formatter: '{b}: {c} 文件 ({d}%)' },
     series: [{
       type: 'pie',
-      radius: ['30%', '55%'],
+      radius: ['30%', '52%'],
       center: ['50%', '50%'],
       label: {
         formatter: '{b} ({d}%)',
         color: '#333',
-        fontSize: 12,
-        fontWeight: 'bold',
+        fontSize: 10,
         show: true,
       },
       data: Object.entries(preview.by_defect || {}).map(([k, v]) => ({
         name: DEFECT_FULL_NAMES[k] || k,
         value: v.count,
         itemStyle: { color: DEFECT_COLORS[k] || '#888' }
+      }))
+    }]
+  } : null
+
+  // ── 材料分布饼图 ──
+  const materialPieOption = preview?.by_material ? {
+    tooltip: { trigger: 'item', formatter: '{b}: {c} 文件 ({d}%)' },
+    series: [{
+      type: 'pie',
+      radius: ['30%', '52%'],
+      center: ['50%', '50%'],
+      label: {
+        formatter: '{b} ({d}%)',
+        color: '#333',
+        fontSize: 10,
+        show: true,
+      },
+      data: Object.entries(preview.by_material).map(([k, v], i) => ({
+        name: k,
+        value: v,
+        itemStyle: { color: FIBER_GRADE_COLORS[i % FIBER_GRADE_COLORS.length] }
       }))
     }]
   } : null
@@ -223,11 +256,19 @@ export default function TrainingPanel() {
                 <div style={{ marginTop: 12 }}>
                   <Statistic title="缺陷类别" value={Object.keys(preview.by_defect || {}).length} suffix="类" />
                 </div>
+                <div style={{ marginTop: 12 }}>
+                  <Statistic title="材料体系" value={Object.keys(preview.by_material || {}).length} suffix="种" />
+                </div>
               </Card>
             </Col>
-            <Col span={16}>
+            <Col span={8}>
               <Card size="small" title="各类缺陷分布" bodyStyle={{ padding: 4 }}>
-                <ReactECharts option={pieOption} style={{ height: 280 }} />
+                <ReactECharts option={defectPieOption} style={{ height: 280 }} />
+              </Card>
+            </Col>
+            <Col span={8}>
+              <Card size="small" title="材料分布" bodyStyle={{ padding: 4 }}>
+                <ReactECharts option={materialPieOption} style={{ height: 280 }} />
               </Card>
             </Col>
           </Row>
