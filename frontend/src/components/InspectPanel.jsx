@@ -75,7 +75,7 @@ export default function InspectPanel({
 
                 value={defectType}
 
-                style={{ width:220 }}
+                style={{ width: 150 }}
 
                 onChange={(v) => {
                     setDefectType(v);

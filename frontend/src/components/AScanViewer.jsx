@@ -160,23 +160,70 @@ export default function AScanViewer({
       {wave.length > 0 && (
         <ReactECharts
           option={{
-            tooltip:{},
+            tooltip:{
+              trigger: 'axis',
+              formatter: params => {
+                const p = params[0]
+                if (!p) return ''
+                const t = p.data[0].toFixed(3)
+                const v = p.data[1].toFixed(1)
+                return `时间: ${t} μs<br/>幅值: ${v}%`
+              }
+            },
             xAxis:{
-              type:'category',
-              data:wave.map(
-                (_,i)=>i
-              )
+              type:'value',
+              name: '时间 (μs)',
+              nameLocation: 'center',
+              nameGap: 28,
+              min: 0,
+              max: 25,
+              interval: 5,
+              axisTick: { show: false },
+              axisLabel: {
+                fontSize: 10,
+                color: '#999',
+                formatter: v => v.toFixed(1),
+              },
+              splitLine: {
+                show: true,
+                lineStyle: { color: '#d9d9d9', type: 'dashed', width: 1 },
+              },
             },
             yAxis:{
               type:'value',
+              name: '幅值 (%)',
+              nameLocation: 'center',
+              nameGap: 45,
               min: yMin,
               max: yMax,
+              axisTick: { show: false },
+              axisLabel: {
+                fontSize: 10,
+                color: '#999',
+                formatter: v => Math.round(v),
+              },
+              splitLine: {
+                show: true,
+                lineStyle: { color: '#d9d9d9', type: 'dashed', width: 1 },
+              },
             },
             series:[
               {
                 type:'line',
                 smooth:true,
-                data:wave
+                showSymbol: false,
+                data: wave.map((v, i) => [i * (1 / 80), +(v / 20).toFixed(2)]),
+                markLine: {
+                  silent: true,
+                  symbol: 'none',
+                  label: { show: false },
+                  lineStyle: { color: '#6e7079', type: 'solid', width: 1 },
+                  data: [
+                    { xAxis: 25 },
+                    { yAxis: yMax },
+                    { yAxis: yMin },
+                  ],
+                },
               }
             ]
           }}

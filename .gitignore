@@ -36,6 +36,9 @@ backend/.env
 # Uploaded files
 uploads/
 
+# Generated reports
+backend/reports/*.docx
+
 # NDE/HDF5 Data
 *.nde
 *.h5

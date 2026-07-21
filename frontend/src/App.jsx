@@ -49,7 +49,7 @@ export default function App() {
     const [batchDefectType, setBatchDefectType] = useState('OK')
     const [activeModule, setActiveModule] = useState('labeling')
     const [frameLabels, setFrameLabels] = useState(null)
-    const [yAxisRange, setYAxisRange] = useState([-2000, 2000])
+    const [yAxisRange, setYAxisRange] = useState([-100, 100])
     const [datasetPath, setDatasetPath] = useState('')
 
     const heatmapHeight = heatmap
@@ -110,7 +110,7 @@ export default function App() {
         if (node.path && node.path.includes('FrameLabels')) {
             setYAxisRange([-10, 10])
         } else {
-            setYAxisRange([-2000, 2000])
+            setYAxisRange([-100, 100])
         }
         const res = await axios.get('http://127.0.0.1:8000/dataset', {
             params: { path: node.path }

@@ -1373,7 +1373,7 @@ def generate_inspection_report(
 ) -> str:
     """
     使用超声检测报告模板 (.docx) 生成检测报告。
-    模板位于项目根目录的 超声检测报告.docx，含 {$...} 占位符。
+    模板位于项目 templates/ 目录下的 超声检测报告.docx，含 {$...} 占位符。
     dispatch_data 为委托单解析数据，用于填充报告字段。
     返回 (报告文件路径, 报告编号)。
     """
@@ -1385,7 +1385,7 @@ def generate_inspection_report(
     basename = os.path.splitext(os.path.basename(filename))[0]
 
     # ── 1. 定位模板文件 ──
-    template_path = os.path.join(os.path.dirname(__file__), "..", "超声检测报告.docx")
+    template_path = os.path.join(os.path.dirname(__file__), "..", "templates", "超声检测报告.docx")
     if not os.path.exists(template_path):
         # 若模板不存在，回退到程序化生成
         return _generate_report_fallback(filename, meta, signal_analysis, defect_result, confidence, model_name)
