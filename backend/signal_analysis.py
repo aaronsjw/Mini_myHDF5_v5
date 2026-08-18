@@ -7,7 +7,7 @@ import json
 import h5py
 import numpy as np
 
-
+# 找hdf5里主数据张量路径
 def _get_dataset_path(f: h5py.File) -> str:
     """在 HDF5 文件中查找主数据张量的路径"""
     candidates = [
@@ -29,6 +29,7 @@ def _get_dataset_path(f: h5py.File) -> str:
     return None
 
 
+# 加载元数据===》for chat
 def load_nde_meta(file_path: str) -> dict:
     """
     读取 .nde 文件的元数据（GlobalLabel + MaterialInfo + DetectionInfo）
@@ -39,19 +40,19 @@ def load_nde_meta(file_path: str) -> dict:
             # GlobalLabel
             try:
                 raw = f["Private/GlobalLabel"][()]
-                meta["GlobalLabel"] = json.loads(raw.decode("utf-8"))
+                meta["GlobalLabel"] = json.loads(raw.decode("utf-8"))       # 缺陷类型/结构
             except Exception:
                 pass
             # MaterialInfo
             try:
                 raw = f["Private/MaterialInfo"][()]
-                meta["MaterialInfo"] = json.loads(raw.decode("utf-8"))
+                meta["MaterialInfo"] = json.loads(raw.decode("utf-8"))      # 纤维/基体
             except Exception:
                 pass
             # DetectionInfo
             try:
                 raw = f["Private/DetectionInfo"][()]
-                meta["DetectionInfo"] = json.loads(raw.decode("utf-8"))
+                meta["DetectionInfo"] = json.loads(raw.decode("utf-8"))     # 探头/采样频率
             except Exception:
                 pass
     except Exception:
@@ -59,6 +60,7 @@ def load_nde_meta(file_path: str) -> dict:
     return meta
 
 
+# 加载原始波形[N, 2000]
 def load_nde_signal(file_path: str) -> np.ndarray:
     """
     读取 .nde 文件的 B-scan 信号数据。
@@ -69,12 +71,18 @@ def load_nde_signal(file_path: str) -> np.ndarray:
         if ds_path is None:
             raise ValueError("未找到数据张量")
         data = f[ds_path][()]
-        data = np.squeeze(data)
+        data = np.squeeze(data)     # [64,1,2000] → [64,2000]
         if data.ndim != 2:
             raise ValueError(f"数据维度不正确: {data.ndim}")
         return data
 
 
+# 全面信号特征提取————》随机森林  for chat
+#   幅值范围/能量/SNR/均值/标准差/峰值位置
+#   底波能量比（backwall_ratio = 后半段/前半段能量）
+#   衰减系数（首行vs末行能量比）
+#   异常区域检测（滑动窗口能量比 > μ+2σ）
+#   验收专用特征：幅值衰减百分比、连续异常帧数、峰值偏移、帧间相关、孔隙率估算
 def analyze_signal(file_path: str) -> dict:
     """
     对 .nde 文件进行全面信号分析，返回结构化特征。
@@ -99,17 +107,15 @@ def analyze_signal(file_path: str) -> dict:
     n_rows, n_cols = data.shape
 
     # 全信号统计
-    all_vals = data.flatten()
-    amp_min = float(np.min(all_vals))
-    amp_max = float(np.max(all_vals))
-    amp_mean = float(np.mean(all_vals))
-    amp_std = float(np.std(all_vals))
+    all_vals = data.flatten()               # 全部采样点flatten
+    amp_min = float(np.min(all_vals))       # 幅值最小值
+    amp_max = float(np.max(all_vals))       # 幅值最大值
+    amp_mean = float(np.mean(all_vals))     # 平均值
+    amp_std = float(np.std(all_vals))       # 标准差
+    energy = float(np.sum(all_vals ** 2))   # 信号能量（总能量 = 幅值平方和）
 
-    # 信号能量（总能量 = 幅值平方和）
-    energy = float(np.sum(all_vals ** 2))
-
-    # 信噪比估算（信号为整体，噪声取信号后半段无回波区域的后 10%）
-    noise_region = data[:, -200:] if n_cols > 200 else data[:, -50:]
+    # 信噪比估算
+    noise_region = data[:, -200:] if n_cols > 200 else data[:, -50:]            # 假设：后200点为噪声区 FIXME:
     noise_std = float(np.std(noise_region.flatten())) + 1e-10
     snr_db = float(20 * np.log10(amp_std / noise_std)) if noise_std > 0 else 0
 
@@ -173,14 +179,14 @@ def analyze_signal(file_path: str) -> dict:
     else:
         attenuation = 1.0
 
-    # ── 验收判定专用特征 ──
-    # 幅值衰减百分比：基于各帧能量差异
+    # 验收判定专用特征
+    #   1.幅值衰减百分比：基于各帧能量差异
     frame_energies = np.sum(data ** 2, axis=1)
     max_f_energy = float(np.max(frame_energies))
     min_f_energy = float(np.min(frame_energies))
     amp_attenuation = (1 - min_f_energy / (max_f_energy + 1e-10)) * 100
 
-    # 最大连续异常帧数（帧能量低于 Q1-1.5*IQR）
+    #   2.最大连续异常帧数（帧能量低于 Q1-1.5*IQR）
     q1_f = float(np.percentile(frame_energies, 25))
     q3_f = float(np.percentile(frame_energies, 75))
     iqr_f = q3_f - q1_f
@@ -195,11 +201,11 @@ def analyze_signal(file_path: str) -> dict:
             cur_count = 0
     consecutive_abnormal = max_consecutive
 
-    # 峰值位置最大偏移
+    #   3.峰值位置最大偏移
     all_peak_pos = [float(p) for p in peak_positions]
     peak_shift = float(max(all_peak_pos) - min(all_peak_pos)) if len(all_peak_pos) > 1 else 0.0
 
-    # 帧间波形最小相关系数
+    #   4.帧间波形最小相关系数
     corr_vals = []
     for i in range(1, n_rows):
         a, b = data[i - 1], data[i]
@@ -207,7 +213,7 @@ def analyze_signal(file_path: str) -> dict:
             corr_vals.append(float(np.corrcoef(a, b)[0, 1]))
     waveform_corr = min(corr_vals) if corr_vals else 1.0
 
-    # 孔隙率估算（基于整体衰减粗略估计）
+    #   5.孔隙率估算（基于整体衰减粗略估计）
     porosity_estimate = round(min((attenuation - 1) * 5, 10.0), 2) if attenuation > 1 else 0.0
 
     return {
@@ -232,6 +238,7 @@ def analyze_signal(file_path: str) -> dict:
     }
 
 
+# 逐帧能量+异常帧检测，IQR方法
 def analyze_waveform_per_frame(file_path: str) -> dict:
     """
     逐帧分析 A-Scan 波形，返回全量数据和每帧的异常标记。
@@ -261,8 +268,8 @@ def analyze_waveform_per_frame(file_path: str) -> dict:
     iqr = q3 - q1
 
     # 异常判定：能量低于 Q1-1.5*IQR（显著衰减）或高于 Q3+1.5*IQR（显著增强）
-    low_threshold = q1 - 1.5 * iqr
-    high_threshold = q3 + 1.5 * iqr
+    low_threshold = q1 - 1.5 * iqr      # 下界
+    high_threshold = q3 + 1.5 * iqr     # 上界
 
     for i in range(n_frames):
         row = data[i, :]
@@ -290,6 +297,7 @@ def analyze_waveform_per_frame(file_path: str) -> dict:
     }
 
 
+# 单帧界波/底波识别
 def detect_surface_and_backwall(ascan: np.ndarray) -> dict:
     """
     从单帧 A-Scan 波形中识别界波（表面波）和底波（底面回波）。
@@ -327,6 +335,7 @@ def detect_surface_and_backwall(ascan: np.ndarray) -> dict:
     }
 
 
+# 全帧界波/底波识别===>for chat
 def analyze_waveform_keypoints(file_path: str) -> dict:
     """对 .nde 文件所有帧识别界波和底波位置"""
     data = load_nde_signal(file_path)

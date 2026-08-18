@@ -17,7 +17,7 @@ import os
 import re
 from typing import Optional
 
-
+# 验收判定类
 class AcceptanceChecker:
     def __init__(self, standards_dir: str = None):
         self.standards_dir = standards_dir or os.path.join(
@@ -26,8 +26,7 @@ class AcceptanceChecker:
         self._index = None
         self._loaded_standards = {}
 
-    # ── 索引管理 ──
-
+    # 索引管理
     def get_index(self) -> list:
         """返回所有可用的验收标准列表"""
         if self._index is None:
@@ -45,8 +44,7 @@ class AcceptanceChecker:
         except Exception:
             return []
 
-    # ── 标准加载 ──
-
+    # 标准加载
     def load_standard(self, standard_id: str) -> Optional[dict]:
         """按标准 ID 加载对应的 summary.json"""
         if standard_id in self._loaded_standards:
@@ -75,8 +73,7 @@ class AcceptanceChecker:
         except Exception:
             return None
 
-    # ── 核心判定 ──
-
+    # 缺陷评估判定
     def check(self, standard_id: str, detection_result: dict) -> dict:
         """
         根据验收标准检查缺陷是否超标
@@ -205,8 +202,7 @@ class AcceptanceChecker:
             "cscan_criteria": criteria.get("cscan_criteria", None),
         }
 
-    # ── 辅助方法 ──
-
+    # 辅助方法
     def _find_criteria(self, standard: dict, defect_type: str, defect_type_en: str) -> Optional[dict]:
         """在标准中查找匹配缺陷类型的验收条款"""
         for c in standard.get("defect_criteria", []):
@@ -216,6 +212,7 @@ class AcceptanceChecker:
                 return c
         return None
 
+    # 规则索引
     def _eval_rule(self, rule: str, features: dict) -> tuple:
         """
         评估单条规则
@@ -255,6 +252,7 @@ class AcceptanceChecker:
 
         return self._eval_single_rule(rule, features)
 
+    #
     def _eval_single_rule(self, rule: str, features: dict) -> tuple:
         """评估单个条件"""
         pattern = r"^([a-zA-Z_0-9]+)\s*(>=|<=|>|<|==|!=)\s*(-?[\d.]+)$"
@@ -290,8 +288,7 @@ class AcceptanceChecker:
             return actual_float != val, detail
         return False, detail
 
-    # ── 自动匹配标准 ──
-
+    # 自动匹配标准
     def suggest_standard(self, meta: dict) -> Optional[str]:
         """根据材料信息自动推荐适用的验收标准"""
         fiber = (meta.get("fiber") or "").upper()

@@ -13,7 +13,7 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-chat"  # deepseek-chat = V3, deepseek-reasoner = R1
 
-
+# 异步流式调用DeepSeek
 async def chat_stream(
     messages: list,
     system_prompt: str = "",

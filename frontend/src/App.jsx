@@ -1,10 +1,11 @@
 // App.jsx
 import React, { useState, useEffect, useRef } from 'react'
-import axios from 'axios'
+import axios from 'axios'   // HTTP请求库，用于和后端FastAPI通信
+
 import HeatmapViewer from './components/HeatmapViewer'
 import AScanViewer from './components/AScanViewer'
 import MatrixViewer from './components/MatrixViewer'
-import InspectPancel from './components/InspectPanel'
+import InspectPanel from './components/InspectPanel'
 import DatabaseOverview from './components/DatabaseOverview'
 import TrainingPanel from './components/TrainingPanel'
 import TestingPanel from './components/TestingPanel'
@@ -19,24 +20,26 @@ import {
     Tabs,
     Select,
     Collapse
-} from 'antd'
+} from 'antd'       // UI组件库
 
+// =========================================
+// 状态声明
+// =========================================
 const { Sider, Content } = Layout
 
 export default function App() {
-
-    const [treeData, setTreeData] = useState([])
-    const [info, setInfo] = useState(null)
+    const [treeData, setTreeData] = useState([])            // 文件树结构
+    const [info, setInfo] = useState(null)                  // 当前选中文件的元信息
     const [currentPath, setCurrentPath] = useState('')
     const [editableJson, setEditableJson] = useState(null)
-    const [wave, setWave] = useState([])
-    const [heatmap, setHeatmap] = useState(null)
-    const [frames, setFrames] = useState([])
+    const [wave, setWave] = useState([])                    // A-Scan波形数据
+    const [heatmap, setHeatmap] = useState(null)            // B-Scan二维图数据
+    const [frames, setFrames] = useState([])                // 多帧波形
     const [frameIndex, setFrameIndex] = useState(0)
     const [currentFile, setCurrentFile] = useState('')
     const [colorMap, setColorMap] = useState('Greys')
 
-    const [playing, setPlaying] = useState(false)
+    const [playing, setPlaying] = useState(false)           // 是否自动播放
     const [playSpeed, setPlaySpeed] = useState(80)
     const playTimer = useRef(null)
 
@@ -45,21 +48,22 @@ export default function App() {
     const [reverseX, setReverseX] = useState(false)
     const [reverseY, setReverseY] = useState(false)
 
-    const [expandedKeys, setExpandedKeys] = useState([])
+    const [expandedKeys, setExpandedKeys] = useState([])            // 组件Tree展开状态
     const [batchDefectType, setBatchDefectType] = useState('OK')
     const [activeModule, setActiveModule] = useState('labeling')
-    const [frameLabels, setFrameLabels] = useState(null)
+    const [frameLabels, setFrameLabels] = useState(null)            // 每帧的标注类别
     const [yAxisRange, setYAxisRange] = useState([-100, 100])
-    const [datasetPath, setDatasetPath] = useState('')
+    const [datasetPath, setDatasetPath] = useState('')              // 数据库子目录路径
 
     const heatmapHeight = heatmap
         ? Math.max(300, Math.min(heatmap.length * 6, 800))
         : 400
 
     // =========================================
-    // Upload
+    // 文件上传
     // =========================================
     const uploadFile = async (file) => {
+        // 1.清空旧数据
         setInfo(null)
         setEditableJson(null)
         setWave([])
@@ -70,24 +74,28 @@ export default function App() {
         setCurrentFile(file.name)
         setFrameLabels(null)
 
+        // 2.用FormData包装文件，发送POST请求
         const form = new FormData()
         form.append('file', file)
 
+        // 前端-》后端
         await axios.post('http://127.0.0.1:8000/upload', form)
 
+        // zip
         if (file.name.toLowerCase().endsWith('.zip')) {
             setCurrentFile(file.name)
             return false
         }
 
-        const res = await axios.get('http://127.0.0.1:8000/tree')
-        setTreeData(res.data)
-        setExpandedKeys(getAllKeys(res.data))
+        // 3.文件树
+        const res = await axios.get('http://127.0.0.1:8000/tree')   // GET内部结构树
+        setTreeData(res.data)                   // 渲染树
+        setExpandedKeys(getAllKeys(res.data))   // 展开树
         return false
     }
 
     // =========================================
-    // Upload 递归展开
+    // Upload JSON递归展开
     // =========================================
     const getAllKeys = (nodes) => {
         let keys = []
@@ -101,7 +109,7 @@ export default function App() {
     }
 
     // =========================================
-    // Select Dataset
+    // Select Dataset 选择文件节点，点击树节点触发
     // =========================================
     const onSelect = async (_, nodeInfo) => {
         const node = nodeInfo.node
@@ -112,6 +120,7 @@ export default function App() {
         } else {
             setYAxisRange([-100, 100])
         }
+        // 请求该节点数据
         const res = await axios.get('http://127.0.0.1:8000/dataset', {
             params: { path: node.path }
         })
@@ -122,6 +131,7 @@ export default function App() {
         setHeatmap(null)
         setFrames([])
 
+        // 根据数据类型设置wave/heatmap/frames
         if (d.type === 'waveform') setWave(d.data || [])
         if (d.type === 'image') setHeatmap(d.image)
         if (d.type === 'nde_tensor') {
@@ -140,8 +150,11 @@ export default function App() {
         }
     }
 
-    // 保存帧标签（乐观更新：先改UI，再保存到后端）
+    // =========================================
+    // 标注保存
+    // =========================================
     const handleSaveFrameLabel = (frameIdx, labelId) => {
+        // 先改UI
         setFrameLabels(prev => {
             const base = prev || new Array(frames.length || 64).fill(-1)
             const next = [...base]
@@ -175,7 +188,7 @@ export default function App() {
     }
 
     // =========================================
-    // A-Scan Auto Play
+    // 控制自动播放 A-Scan Auto Play
     // =========================================
     useEffect(() => {
         if (!playing) {
@@ -197,11 +210,12 @@ export default function App() {
     }, [playing, frames, playSpeed])
 
     // =========================================
-    // Render
+    // 渲染部分 JSX Render
     // =========================================
     return (
         <Layout style={{ height: '100vh' }}>
-            {/* LEFT SIDEBAR */}
+
+            {/* LEFT SIDEBAR 左侧菜单 */}
             <Sider
                 width={320}
                 style={{
@@ -227,7 +241,7 @@ export default function App() {
                         复合材料智能检测与评估系统
                     </div>
 
-                    {/* Collapsible Panels */}
+                    {/* Collapsible Panels 折叠面板，五个菜单项（数据标注、数据库、模型训练、模型测试、智能评估） */}
                     <div style={{ flex: 1, overflow: 'hidden' }}>
                         <Collapse
                             defaultActiveKey={['labeling']}
@@ -236,6 +250,8 @@ export default function App() {
                             bordered={false}
                             ghost
                             items={[
+
+                                // 数据标注面板
                                 {
                                     key: 'labeling',
                                     label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>数据标注</span>,
@@ -324,6 +340,7 @@ export default function App() {
                                         </div>
                                     )
                                 },
+                                // 数据库面板
                                 {
                                     key: 'dataset',
                                     label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>数据库</span>,
@@ -532,6 +549,7 @@ export default function App() {
                                         </div>
                                     )
                                 },
+                                // 模型训练面板
                                 {
                                     key: 'model',
                                     label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>模型训练</span>,
@@ -541,6 +559,7 @@ export default function App() {
                                         </div>
                                     )
                                 },
+                                // 模型测试面板
                                 {
                                     key: 'test',
                                     label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>模型测试</span>,
@@ -550,6 +569,7 @@ export default function App() {
                                         </div>
                                     )
                                 },
+                                // 智能评估面板
                                 {
                                     key: 'analysis',
                                     label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>智能评估</span>,
@@ -563,7 +583,7 @@ export default function App() {
                         />
                     </div>
 
-                    {/* Footer */}
+                    {/* Footer 作者信息 */}
                     <div style={{
                         textAlign: 'center',
                         color: '#666',
@@ -579,13 +599,13 @@ export default function App() {
                 </div>
             </Sider>
 
-
-            {/* RIGHT CONTENT */}
+            {/* RIGHT CONTENT 右侧内容 */}
             <Content style={{ padding: 20, overflow: 'hidden', background: '#f5f5f5', position: 'relative' }}>
-                {/* 用 display:none 替代条件渲染，防止组件卸载导致状态丢失 */}
+                {/* 模型训练 TrainingPanel ****************/}
                 <div style={{ height: '100%', overflow: 'auto', display: activeModule === 'model' ? 'block' : 'none' }}>
                     <TrainingPanel />
                 </div>
+                {/* 数据库预览 DatabaseOverview ****************/}
                 <div style={{ height: '100%', overflow: 'auto', display: activeModule === 'dataset' ? 'block' : 'none' }}>
                     {(() => {
                         if (datasetPath === 'ultrasonic/ascan') return <DatabaseOverview />
@@ -610,12 +630,15 @@ export default function App() {
                         )
                     })()}
                 </div>
+                {/* 模型测试 TestingPanel ****************/}
                 <div style={{ height: '100%', overflow: 'auto', display: activeModule === 'test' ? 'block' : 'none' }}>
                     <TestingPanel />
                 </div>
+                {/* 智能评估 EvaluationPanel ****************/}
                 <div style={{ height: '100%', display: activeModule === 'analysis' ? 'block' : 'none' }}>
                     <EvaluationPanel />
                 </div>
+                {/* 数据标注 ****************/}
                 <div style={{ height: '100%', display: activeModule === 'labeling' ? 'block' : 'none' }}>
                     {info && (
                         <Tabs
@@ -623,11 +646,12 @@ export default function App() {
                             tabBarStyle={{ color: '#fff', background: '#fff', padding: '8px 12px', borderRadius: '8px' }}
 
                             items={[
+                                // 数据标注 - 第一个标签页Inspect
                                 {
                                     key: 'inspect',
                                     label: 'Inspect',
                                     children: (
-                                        <InspectPancel
+                                        <InspectPanel
                                             info={info}
                                             editableJson={editableJson}
                                             handleJsonEdit={handleJsonEdit}
@@ -636,7 +660,7 @@ export default function App() {
                                         />
                                     )
                                 },
-
+                                // 数据标注 - 第二个标签页Display
                                 ...(['waveform', 'nde_tensor'].includes(info.type)
                                     ? [{
                                         key: 'display',
@@ -645,11 +669,13 @@ export default function App() {
                                             <Tabs
                                                 defaultActiveKey="ascan"
                                                 items={[
+                                                    // MatrixViewer 展示原始帧矩阵数据
                                                     {
                                                         key: 'matrix',
                                                         label: 'Matrix',
                                                         children: <MatrixViewer frames={frames} />
                                                     },
+                                                    // AScanViewer 绘制波形图
                                                     {
                                                         key: 'ascan',
                                                         label: 'A-Scan',
@@ -670,6 +696,7 @@ export default function App() {
                                                             />
                                                         )
                                                     },
+                                                    // HeatmapViewer 绘制热图
                                                     {
                                                         key: 'heatmap',
                                                         label: 'Heatmap',
@@ -700,6 +727,7 @@ export default function App() {
                     )}
                 </div>
             </Content>
+
         </Layout>
     )
 }

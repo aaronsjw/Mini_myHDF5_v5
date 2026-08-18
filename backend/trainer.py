@@ -11,7 +11,7 @@ from datetime import datetime
 import h5py
 import numpy as np
 
-# ── 传统机器学习 ──
+# 传统机器学习
 import joblib
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
@@ -19,7 +19,7 @@ from sklearn.metrics import (
     accuracy_score, classification_report, confusion_matrix
 )
 
-# ── 深度学习 ──
+# 深度学习
 try:
     import torch
     import torch.nn as nn
@@ -31,9 +31,9 @@ except ImportError:
     import warnings
     warnings.warn("PyTorch 未安装，深度学习模型不可用")
 
-# ─── 配置 ───────────────────────────────────────────
-BASE_DIR = os.path.join(os.path.dirname(__file__), "..", "dataset")
-MODEL_DIR = os.path.join(os.path.dirname(__file__), "models")
+# 配置常量
+BASE_DIR = os.path.join(os.path.dirname(__file__), "..", "dataset")     # 数据集目录
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "models")           # 模型保存目录
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 # 命名规则正则（用于从文件名获取标签）
@@ -42,19 +42,23 @@ FILENAME_PATTERN = re.compile(
 )
 
 
-# ─── 特征提取 ─────────────────────────────────────
-MAX_ASCAN_LINES = 64  # 统一行数（不足补0，超出截断）
+# ══════════════════════════════════════════════════
+# 1.机器学习模型（随机森林）
+# ══════════════════════════════════════════════════
+# region 机器学习模型
 
-# 元数据类别编码（用于 RandomForest 特征增强）
-META_CATEGORIES = {
+# 特征提取64+8
+MAX_ASCAN_LINES = 64                        # 统一行数，不足补0，超出截断
+META_CATEGORIES = {                         # 材料结构元数据类别编码，共8维，RandomForest 特征增强
     "fiber": ["CF", "GF"],
     "fiberGrade": ["ZT9H", "QW280"],
     "matrixGrade": ["1316", "AC319"],
     "structure": ["BondPP", "Plate"],
 }
-META_FEATURE_DIM = sum(len(v) for v in META_CATEGORIES.values())  # = 8 维 onehot
+META_FEATURE_DIM = sum(len(v) for v in META_CATEGORIES.values())  # 8维one-hot
 
 
+# 元数据特征提取--》8维元数据one-hot
 def encode_metadata(label_obj: dict, material_obj: dict) -> np.ndarray:
     """
     从 GlobalLabel 和 MaterialInfo 提取元数据，编码为 one-hot 向量。
@@ -85,10 +89,14 @@ def encode_metadata(label_obj: dict, material_obj: dict) -> np.ndarray:
         vec.extend(onehot)
     return np.array(vec, dtype=np.float32)
 
+
+# 超声信号特征提取--》390维信号统计特征
+#   390=64行*6统计量（mean/std/max/min/range/RMS）+6维全局统计
 def extract_features(data: np.ndarray) -> np.ndarray:
     """
     从 B-scan [N, 2000] 提取 390 维统计特征向量。
     - 前 384 维: 每行 A-scan 的 6 种统计量 × 64 行（不足补0，超出截断）
+    - 6种统计量(mean/std/max/min/range/RMS)
     - 后 6 维: 全局统计量
     """
     n_lines = data.shape[0]
@@ -123,7 +131,7 @@ def extract_features(data: np.ndarray) -> np.ndarray:
     ])
     return np.array(features, dtype=np.float32)
 
-
+#
 def get_dataset_path(f: h5py.File) -> str:
     """在 HDF5 文件中查找主数据张量的路径（3D 且含 AScanAmplitude）"""
     # 优先已知路径
@@ -146,7 +154,7 @@ def get_dataset_path(f: h5py.File) -> str:
     return None
 
 
-# ─── 数据加载 ─────────────────────────────────────
+# 数据加载，8维元数据one-hot+390维信号统计特征
 def load_dataset(base_dir=None, max_files=None, progress_callback=None,
                  use_metadata=True):
     """
@@ -225,7 +233,7 @@ def load_dataset(base_dir=None, max_files=None, progress_callback=None,
                     loaded += 1
 
                     if progress_callback and total_files > 0:
-                        progress_callback(int(loaded / total_files * 80))
+                        progress_callback(int(loaded / total_files * 80))   # 加载进度
             except Exception as e:
                 print(f"  [skip] {fname}: {e}")
                 continue
@@ -236,13 +244,70 @@ def load_dataset(base_dir=None, max_files=None, progress_callback=None,
     return X, y, class_list, loaded, file_paths
 
 
-# ─── 模型训练 ─────────────────────────────────────
+# 数据预览（不训练，只统计）
+def preview_dataset(base_dir=None):
+    """返回数据集统计信息，不加载完整数据"""
+    if base_dir is None:
+        base_dir = BASE_DIR
+    if not os.path.isdir(base_dir):
+        return {"error": "dataset directory not found"}
+
+    result = {
+        "by_defect": {}, "total_files": 0,
+        "n_features": None, "n_features_total": None,
+        "by_material": {},     # 材料分布（纤维牌号/基体牌号）
+    }
+    for dd in sorted(os.listdir(base_dir)):
+        dir_path = os.path.join(base_dir, dd)
+        if not os.path.isdir(dir_path):
+            continue
+        nde_files = [f for f in os.listdir(dir_path) if f.lower().endswith('.nde')]
+        if not nde_files:
+            continue
+        # 从第一个文件推断特征维度
+        if result["n_features"] is None:
+            try:
+                fpath = os.path.join(dir_path, nde_files[0])
+                with h5py.File(fpath, 'r') as f:
+                    ds_path = get_dataset_path(f)
+                    if ds_path:
+                        data = f[ds_path][()]
+                        data = np.squeeze(data)
+                        signal_feats = extract_features(data)
+                        result["n_features"] = len(signal_feats)
+                        result["n_features_total"] = len(signal_feats) + META_FEATURE_DIM
+            except Exception:
+                pass
+
+        result["by_defect"][dd] = {
+            "count": len(nde_files),
+            "label": dd
+        }
+        result["total_files"] += len(nde_files)
+
+        # ── 按文件名解析材料分布 ──
+        for fname in nde_files:
+            m = FILENAME_PATTERN.match(fname)
+            if m:
+                tail = m.group(8)
+                tail_parts = tail.split("_")
+                fiber_grade = tail_parts[0] if len(tail_parts) >= 1 else "?"
+                matrix_grade = tail_parts[1] if len(tail_parts) >= 2 else "?"
+                mat_key = f"{fiber_grade}/{matrix_grade}"
+                result["by_material"][mat_key] = result["by_material"].get(mat_key, 0) + 1
+
+    return result
+
+
+# 随机森林训练
 def train_model(X, y, test_size=0.2, n_estimators=100, max_depth=None,
                 progress_callback=None):
     """
     训练 RandomForest 分类器。
     返回 model, metrics
     """
+
+    # 1.划分训练/测试集
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=test_size, random_state=42, stratify=y
     )
@@ -250,11 +315,12 @@ def train_model(X, y, test_size=0.2, n_estimators=100, max_depth=None,
     if progress_callback:
         progress_callback(85)
 
+    # 2.构建并训练随机森林
     model = RandomForestClassifier(
-        n_estimators=n_estimators,
-        max_depth=max_depth,
+        n_estimators=n_estimators,      # 树的数量
+        max_depth=max_depth,            # 树的深度
         random_state=42,
-        n_jobs=-1,
+        n_jobs=-1,                      # 全核并行
         verbose=0
     )
     model.fit(X_train, y_train)
@@ -262,14 +328,16 @@ def train_model(X, y, test_size=0.2, n_estimators=100, max_depth=None,
     if progress_callback:
         progress_callback(92)
 
+    # 3.评估
     y_pred = model.predict(X_test)
-    acc = accuracy_score(y_test, y_pred)
-    cm = confusion_matrix(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
+    acc = accuracy_score(y_test, y_pred)                                # 准确率
+    cm = confusion_matrix(y_test, y_pred)                               # 混淆矩阵
+    report = classification_report(y_test, y_pred, output_dict=True)    # 分类报告（精确率、召回率、F1）
 
     if progress_callback:
         progress_callback(98)
 
+    # 汇总指标
     metrics = {
         "model_type": "random_forest",
         "accuracy": float(acc),
@@ -286,7 +354,7 @@ def train_model(X, y, test_size=0.2, n_estimators=100, max_depth=None,
 
     return model, metrics
 
-
+# 模型管理：保存模型
 def save_model(model, metrics):
     """保存模型和指标到 models/ 目录"""
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -296,7 +364,7 @@ def save_model(model, metrics):
     model_path = os.path.join(MODEL_DIR, f"{model_name}.pkl")
     meta_path = os.path.join(MODEL_DIR, f"{model_name}.json")
 
-    joblib.dump(model, model_path)
+    joblib.dump(model, model_path)                  # 序列化模型
     metrics["model_name"] = model_name
     metrics["model_file"] = model_name + ".pkl"
     metrics["saved_at"] = ts
@@ -306,6 +374,8 @@ def save_model(model, metrics):
     return model_name, model_path
 
 
+# 模型管理：list
+#   扫描backend/models/，读json指标文件，按时间倒序返回
 def list_models():
     """列出已保存的所有模型及其指标"""
     models = []
@@ -321,6 +391,8 @@ def list_models():
     return sorted(models, key=lambda m: m.get("saved_at", ""), reverse=True)
 
 
+# 模型管理：delete
+#   
 def delete_model(model_name):
     """删除模型文件"""
     for ext in [".pkl", ".json"]:
@@ -328,11 +400,15 @@ def delete_model(model_name):
         if os.path.exists(path):
             os.remove(path)
 
+# endregion
+
 
 # ══════════════════════════════════════════════════
-# 深度学习模型（CNN + BiLSTM + Transformer）
+# 2.深度学习模型（CNN + BiLSTM + Transformer），完全没考虑元数据
 # ══════════════════════════════════════════════════
+# region 深度学习模型
 
+# 模型
 class DeepNDEClassifier(nn.Module):
     """
     CNN + BiLSTM + Transformer 混合模型
@@ -349,44 +425,45 @@ class DeepNDEClassifier(nn.Module):
                  tf_heads=4, tf_layers=1, dropout=0.3):
         super().__init__()
 
-        # ── 输入归一化 ──
+        # 输入归一化
         self.inst_norm = nn.InstanceNorm1d(2000, affine=True)
 
-        # ── CNN 编码器（逐 A-scan 提取特征） ──
-        # 输入: [B*64, 1, 2000]  →  输出: [B*64, cnn_dim]
+        # CNN
+        #   逐 A-scan 提取特征
+        #   输入: [B*64, 1, 2000]  →  输出: [B*64, cnn_dim]
         self.cnn = nn.Sequential(
-            nn.Conv1d(1, 32, kernel_size=7, stride=2, padding=3),   # 2000→1000
+            nn.Conv1d(1, 32, kernel_size=7, stride=2, padding=3),           # [B*64, 32, 1000]
             nn.BatchNorm1d(32), nn.ReLU(),
-            nn.Conv1d(32, 64, kernel_size=5, stride=2, padding=2),  # 1000→500
+            nn.Conv1d(32, 64, kernel_size=5, stride=2, padding=2),          # [B*64, 64, 500] 
             nn.BatchNorm1d(64), nn.ReLU(),
-            nn.Conv1d(64, cnn_dim, kernel_size=3, stride=2, padding=1),  # 500→250
+            nn.Conv1d(64, cnn_dim, kernel_size=3, stride=2, padding=1),     # [B*64, cnn_dim, 250] 
             nn.BatchNorm1d(cnn_dim), nn.ReLU(),
-            nn.AdaptiveAvgPool1d(1),  # 250→1
+            nn.AdaptiveAvgPool1d(1),                                        # [B*64, cnn_dim]  
         )
 
-        # ── BiLSTM ──
+        # BiLSTM
         self.lstm = nn.LSTM(
-            input_size=cnn_dim,
-            hidden_size=lstm_hidden,
+            input_size=cnn_dim,         # 64
+            hidden_size=lstm_hidden,    # 128
             num_layers=1,
             batch_first=True,
-            bidirectional=True,
+            bidirectional=True,         
             dropout=0,
         )
-        lstm_out = lstm_hidden * 2
+        lstm_out = lstm_hidden * 2      # 输出维度*2=256
 
-        # ── Transformer ──
+        # Transformer
         tf_layer = nn.TransformerEncoderLayer(
-            d_model=lstm_out,
-            nhead=tf_heads,
-            dim_feedforward=lstm_out * 2,
+            d_model=lstm_out,               # 256
+            nhead=tf_heads,                 # 4
+            dim_feedforward=lstm_out * 2,   # 512
             dropout=dropout,
             batch_first=True,
             activation='gelu',
         )
         self.transformer = nn.TransformerEncoder(tf_layer, num_layers=tf_layers)
 
-        # ── 分类头 ──
+        # 分类头
         self.classifier = nn.Sequential(
             nn.LayerNorm(lstm_out),
             nn.Dropout(dropout),
@@ -400,7 +477,6 @@ class DeepNDEClassifier(nn.Module):
         # 统一形状
         if x.dim() == 4:
             x = x.squeeze(1)               # [B, 64, 2000]
-
         B, S, L = x.shape                  # B=batch, S=64行, L=2000
 
         # 逐样本归一化（对每行 A-scan 做 InstanceNorm）
@@ -414,18 +490,18 @@ class DeepNDEClassifier(nn.Module):
         x = x.reshape(B, S, -1)            # [B, 64, cnn_dim]
 
         # LSTM
-        x, _ = self.lstm(x)                # [B, 64, lstm_hidden*2]
+        x, _ = self.lstm(x)                # [B, 64, 256]
 
         # Transformer
-        x = self.transformer(x)            # [B, 64, lstm_hidden*2]
+        x = self.transformer(x)            # [B, 64, 256]
 
         # 序列池化
-        x = x.mean(dim=1)                  # [B, lstm_hidden*2]
+        x = x.mean(dim=1)                  # [B, 256]
 
         # 分类头
         return self.classifier(x)          # [B, n_classes]
 
-
+# 数据集
 class NDEDataset(Dataset):
     """原始 2D 数据 PyTorch Dataset（自动逐样本归一化）"""
     def __init__(self, X, y, class_to_idx):
@@ -444,7 +520,7 @@ class NDEDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
-
+# 测试数据集
 class InferenceDataset(Dataset):
     """仅用于推理的 Dataset（不需要标签）"""
     def __init__(self, X):
@@ -479,7 +555,7 @@ def _standardize_2d(data, target_rows=64, target_cols=2000):
         out = padded
     return out
 
-
+# 数据加载：原始波形
 def load_dataset_raw(base_dir=None, max_files=None, progress_callback=None):
     """
     加载原始 2D 信号数据（不提取统计特征）。
@@ -593,7 +669,7 @@ def train_deep_model(X, y, class_list, epochs=20, batch_size=16, lr=1e-3,
     step = 0
 
     for epoch in range(epochs):
-        # ── 训练 ──
+        # 训练
         model.train()
         train_loss = 0.0
         train_correct = 0
@@ -620,7 +696,7 @@ def train_deep_model(X, y, class_list, epochs=20, batch_size=16, lr=1e-3,
 
         scheduler.step()
 
-        # ── 评估 ──
+        # 评估
         model.eval()
         all_preds, all_targets = [], []
         test_loss = 0.0
@@ -715,11 +791,18 @@ def save_deep_model(state_dict, metrics, class_list):
 
     return model_name, model_path
 
-
-# ─── 后台任务管理 ─────────────────────────────────
-_tasks = {}  # {job_id: {status, progress, result, error}}
+# endregion
 
 
+# ══════════════════════════════════════════════════
+# 3.后台任务管理
+# ══════════════════════════════════════════════════
+# region 后台任务管理
+
+# 任务状态字典
+_tasks = {}     # {job_id: {status, progress, result, error}}
+
+# 后台训练线程
 def _run_train(job_id, config):
     """后台线程执行训练（支持多种模型）"""
     task = _tasks[job_id]
@@ -734,11 +817,11 @@ def _run_train(job_id, config):
         task["progress"] = 0
 
         if model_type == "deep_cnn_lstm_transformer":
-            # ── 深度学习分支 ──
+            # 深度学习分支
             if not DEEP_LEARNING_AVAILABLE:
                 raise RuntimeError("PyTorch 未安装，无法训练深度学习模型")
 
-            X_raw, y, class_names, n_loaded, _ = load_dataset_raw(
+            X_raw, y, class_names, n_loaded, _ = load_dataset_raw(      # DL数据
                 progress_callback=progress_callback
             )
 
@@ -750,7 +833,7 @@ def _run_train(job_id, config):
             task["status"] = "training"
             task["progress"] = 80
 
-            best_state, metrics, _ = train_deep_model(
+            best_state, metrics, _ = train_deep_model(                  # DL训练
                 X_raw, y, class_names,
                 epochs=config.get("epochs", 20),
                 batch_size=config.get("batch_size", 16),
@@ -759,16 +842,16 @@ def _run_train(job_id, config):
                 progress_callback=progress_callback
             )
 
-            model_name, _ = save_deep_model(best_state, metrics, class_names)
+            model_name, _ = save_deep_model(best_state, metrics, class_names)   # DL模型保存
             metrics["model_name"] = model_name
             task["status"] = "done"
             task["progress"] = 100
             task["result"] = metrics
 
         else:
-            # ── 传统机器学习分支（RandomForest） ──
+            # 传统机器学习分支（RandomForest）
             use_meta = config.get("use_metadata", True)
-            X, y, class_names, n_loaded, _ = load_dataset(
+            X, y, class_names, n_loaded, _ = load_dataset(      # RF数据
                 progress_callback=progress_callback,
                 use_metadata=use_meta,
             )
@@ -781,7 +864,8 @@ def _run_train(job_id, config):
             task["status"] = "training"
             task["progress"] = 80
 
-            model, metrics = train_model(
+            # 随机森林的实际训练
+            model, metrics = train_model(                       # RF模型
                 X, y,
                 test_size=config.get("test_size", 0.2),
                 n_estimators=config.get("n_estimators", 100),
@@ -791,7 +875,7 @@ def _run_train(job_id, config):
 
             metrics["use_metadata"] = use_meta
             metrics["n_features_meta"] = META_FEATURE_DIM
-            model_name, model_path = save_model(model, metrics)
+            model_name, model_path = save_model(model, metrics) # 保存模型
             metrics["model_name"] = model_name
             task["status"] = "done"
             task["progress"] = 100
@@ -803,90 +887,39 @@ def _run_train(job_id, config):
         import traceback
         task["error"] += "\n" + traceback.format_exc()
 
-
+# 启动异步训练
 def start_train(config: dict) -> str:
     """启动异步训练任务，返回 job_id"""
-    job_id = uuid.uuid4().hex[:12]
+    job_id = uuid.uuid4().hex[:12]      # 12位随机任务号
     _tasks[job_id] = {
         "status": "pending",
         "progress": 0,
         "result": None,
         "error": None,
     }
-    t = threading.Thread(target=_run_train, args=(job_id, config), daemon=True)
+    t = threading.Thread(target=_run_train, args=(job_id, config), daemon=True)     # 线程_run_train
     t.start()
     return job_id
 
-
+# 轮询进度
 def get_status(job_id: str) -> dict:
     return _tasks.get(job_id, {"status": "not_found"})
 
-
+# 训练完拿结果
 def get_result(job_id: str) -> dict:
     task = _tasks.get(job_id)
     if task and task["status"] == "done":
         return task["result"]
     return None
 
+# endregion
 
-# ─── 数据预览（不训练，只统计） ───────────────────
-def preview_dataset(base_dir=None):
-    """返回数据集统计信息，不加载完整数据"""
-    if base_dir is None:
-        base_dir = BASE_DIR
-    if not os.path.isdir(base_dir):
-        return {"error": "dataset directory not found"}
-
-    result = {
-        "by_defect": {}, "total_files": 0,
-        "n_features": None, "n_features_total": None,
-        "by_material": {},     # 材料分布（纤维牌号/基体牌号）
-    }
-    for dd in sorted(os.listdir(base_dir)):
-        dir_path = os.path.join(base_dir, dd)
-        if not os.path.isdir(dir_path):
-            continue
-        nde_files = [f for f in os.listdir(dir_path) if f.lower().endswith('.nde')]
-        if not nde_files:
-            continue
-        # 从第一个文件推断特征维度
-        if result["n_features"] is None:
-            try:
-                fpath = os.path.join(dir_path, nde_files[0])
-                with h5py.File(fpath, 'r') as f:
-                    ds_path = get_dataset_path(f)
-                    if ds_path:
-                        data = f[ds_path][()]
-                        data = np.squeeze(data)
-                        signal_feats = extract_features(data)
-                        result["n_features"] = len(signal_feats)
-                        result["n_features_total"] = len(signal_feats) + META_FEATURE_DIM
-            except Exception:
-                pass
-
-        result["by_defect"][dd] = {
-            "count": len(nde_files),
-            "label": dd
-        }
-        result["total_files"] += len(nde_files)
-
-        # ── 按文件名解析材料分布 ──
-        for fname in nde_files:
-            m = FILENAME_PATTERN.match(fname)
-            if m:
-                tail = m.group(8)
-                tail_parts = tail.split("_")
-                fiber_grade = tail_parts[0] if len(tail_parts) >= 1 else "?"
-                matrix_grade = tail_parts[1] if len(tail_parts) >= 2 else "?"
-                mat_key = f"{fiber_grade}/{matrix_grade}"
-                result["by_material"][mat_key] = result["by_material"].get(mat_key, 0) + 1
-
-    return result
 
 
 # ══════════════════════════════════════════════════
-# 模型测试
+# 4.模型测试
 # ══════════════════════════════════════════════════
+# region 模型测试
 
 _test_tasks = {}  # {job_id: {status, progress, result, error}}
 
@@ -1254,6 +1287,13 @@ def predict_single_file(file_path: str, model_name: str) -> dict:
         "model_type": model_type,
     }
 
+# endregion
+
+
+# ══════════════════════════════════════════════════
+# 5.报告与委托单
+# ══════════════════════════════════════════════════
+# region 报告与委托单
 
 REPORT_DIR = os.path.join(os.path.dirname(__file__), "reports")
 os.makedirs(REPORT_DIR, exist_ok=True)
@@ -1637,3 +1677,5 @@ def _generate_report_fallback(
     report_path = os.path.join(REPORT_DIR, f"{report_id}.docx")
     doc.save(report_path)
     return report_path, report_id
+
+# endregion

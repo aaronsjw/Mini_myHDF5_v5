@@ -1,45 +1,55 @@
 
-from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import FileResponse, StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
-import tempfile
+from fastapi import FastAPI, UploadFile, File, Form             # 文件上传，表单
+from fastapi.responses import FileResponse, StreamingResponse   # 返回文件，流式响应
+from fastapi.middleware.cors import CORSMiddleware              # 跨域资源共享
+import tempfile         # 临时文件
 import os
 import json
 import h5py
 import numpy as np
 import pandas as pd
-import shutil
+import shutil           # 高级文件操作
 import glob
 import zipfile
 import re
 from datetime import datetime
 
+## 模型训练
 from trainer import (
-    preview_dataset, start_train, get_status, get_result, list_models, delete_model,
-    start_test, get_test_status, get_test_result,
+    preview_dataset,        # 预览数据集
+    start_train,            # 启动训练
+    get_status,             # 获取训练状态
+    get_result,             # 获取训练结果
+    list_models, delete_model,
+    start_test,             # 启动测试
+    get_test_status, 
+    get_test_result,
     load_file_for_preview,
-    generate_inspection_report, parse_dispatch_doc,
-    predict_single_file,
+    generate_inspection_report,     # 生成检测报告
+    parse_dispatch_doc,             # 解析委托单
+    predict_single_file,            # 单文件预测
 )
+
+## 信号处理
 from signal_analysis import analyze_signal, load_nde_meta, analyze_waveform_per_frame, analyze_waveform_keypoints
+## 大模型交互
 from deepseek_client import chat_stream
+## 验收判定
 from acceptance_checker import AcceptanceChecker
 
-
-app = FastAPI()
-
-from pydantic import BaseModel
-import h5py
-
+## 请求体模型
+from pydantic import BaseModel      # 前后端交互的数据规范化
 class DefectTypeRequest(BaseModel):
-    path: str
-    defectType: str
+    path: str           # hdf5文件内部路径，对应json节点
+    defectType: str     # 缺陷类型（OK/Dl/...）
 
-
+## 创建应用实例
+#   uvicorn main:app --reload   导入main模块，取出app变量
+app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],    # 允许跨域
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -49,16 +59,24 @@ current_zip = None
 current_filename = "modified.nde"
 current_dispatch_data = {}  # 委托单数据
 
+
+# ══════════════════════════════════════════════════
+# 1.文件上传与HDF5解析
+# ══════════════════════════════════════════════════
+# region 文件上传与HDF5解析
+
+# 上传文件
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
+    
+    # 上传文件的临时内存路径
     global current_file
     global current_filename
 
     suffix = os.path.splitext(file.filename)[1]
 
-    temp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-
-    temp.write(await file.read())
+    temp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)     # 临时文件 TODO:如何清理
+    temp.write(await file.read())   # 异步读取全部文件内容
     temp.close()
 
     if suffix.lower() == ".zip":
@@ -71,45 +89,38 @@ async def upload(file: UploadFile = File(...)):
 
     return {"message": "uploaded", "file_path": current_file, "filename": current_filename}
 
+# 递归建树
 def build_tree(group, path="/"):
-
     result = []
-
     for key in group.keys():
-
         obj = group[key]
-
         current_path = path + key
-
+        # h5py.Group
         if isinstance(obj, h5py.Group):
-
             result.append({
                 "title": key,
                 "key": current_path,
                 "path": current_path,
                 "children": build_tree(obj, current_path + "/")
             })
-
+        # Dataset            
         else:
-
             result.append({
                 "title": key,
                 "key": current_path,
                 "path": current_path,
                 "isLeaf": True
             })
-
     return result
 
+# 文件上传后，解析层级结构，返回JSON
 @app.get("/tree")
 def tree():
-
     global current_file
 
+    # CSV
     if current_file.endswith(".csv"):
-
         df = pd.read_csv(current_file)
-
         return [
             {
                 "title": c,
@@ -123,80 +134,73 @@ def tree():
     with h5py.File(current_file, "r") as f:
         return build_tree(f)
 
+# 前端点击tree节点，传入path，后端接收path，返回对应的json
 @app.get("/dataset")
 def dataset(path: str):
 
     global current_file
 
+    # CSV文件
     if current_file.endswith(".csv"):
-
         df = pd.read_csv(current_file)
-
         arr = df[path].values
-
         return {
             "type": "waveform",
             "shape": list(arr.shape),
             "dtype": str(arr.dtype),
-            "data": arr[:4000].tolist()
+            "data": arr[:4000].tolist()     # TODO:2000点
         }
 
+    # nde文件
     with h5py.File(current_file, "r") as f:
 
         obj = f[path]
-
-        attrs = {}
-
+        attrs = {}      # 节点上的元数据属性
         for k, v in obj.attrs.items():
             attrs[k] = str(v)
 
+        # Group分支，返回“目录+子项名字”
         if isinstance(obj, h5py.Group):
-
             return {
                 "type": "group",
                 "children": list(obj.keys()),
                 "attrs": attrs
             }
 
+        # bytes分支，处理json元数据
         data = obj[()]
 
         # bytes -> json pretty
         if isinstance(data, bytes):
-
             try:
-
-                decoded = data.decode("utf-8")
-
+                decoded = data.decode("utf-8")      # 二进制→字符串
                 try:
+                    # bytes->json
                     parsed = json.loads(decoded)
-
                     return {
                         "type": "json",
                         **parsed,
                         "attrs": attrs
                     }
-
                 except:
-
+                    # bytes->text
                     return {
                         "type": "text",
                         "data": decoded,
                         "attrs": attrs
                     }
-
             except:
-
+                # bytes解码失败，返回bytes
                 return {
                     "type": "bytes",
                     "data": str(data),
                     "attrs": attrs
                 }
 
+        # ndarray分支
         if isinstance(data, np.ndarray):
-
             # 1D waveform
             if data.ndim == 1:
-
                 return {
                     "type": "waveform",
                     "shape": list(data.shape),
@@ -204,10 +208,8 @@ def dataset(path: str):
                     "attrs": attrs,
                     "data": data[:4000].tolist()
                 }
-
             # 2D image
             if data.ndim == 2:
-
                 return {
                     "type": "image",
                     "shape": list(data.shape),
@@ -215,14 +217,10 @@ def dataset(path: str):
                     "attrs": attrs,
                     "image": data.tolist()
                 }
-
             # NDE tensor [64,1,2000]
             if data.ndim == 3:
-
                 squeezed = np.squeeze(data)
-
                 if squeezed.ndim == 2:
-
                     return {
                         "type": "nde_tensor",
                         "shape": list(data.shape),
@@ -232,7 +230,7 @@ def dataset(path: str):
                         "bscan": squeezed.tolist(),
                         "ascan": squeezed[0].tolist()
                     }
-
+            # 其他，前100点
             return {
                 "type": "ndarray",
                 "shape": list(data.shape),
@@ -240,89 +238,41 @@ def dataset(path: str):
                 "attrs": attrs,
                 "preview": data.flatten()[:100].tolist()
             }
-
+        # 标量，单个数值
         return {
             "type": "scalar",
             "data": str(data),
             "attrs": attrs
         }
 
+# 在json编辑器里修改全局标注defectType，写回nde文件的/Private/GlobalLabel节点
 @app.post("/save_defect_type")
 async def save_defect_type(req: DefectTypeRequest):
 
-    print(
-        "SAVE REQUEST",
-        req.path,
-        req.defectType
-    )
-
+    print("SAVE REQUEST", req.path, req.defectType )
     global current_file
 
     try:
-
         with h5py.File(current_file, "r+") as f:
-
-            print(
-                "OPEN DATASET",
-                req.path
-            )
-
-            ds = f[req.path]
+            print( "OPEN DATASET", req.path )
+            ds = f[req.path]        # 按路径拿出dataset
             print("SAVE PATH =", req.path)
-            
-
-            raw = ds[()]
+            raw = ds[()]            # 读原始值
 
             if isinstance(raw, bytes):
+                obj = json.loads(raw.decode("utf-8"))   # bytes-str-dict
+                obj["defectType"] = req.defectType      # 写入新
+                print("NEW JSON:", obj)
 
-                obj = json.loads(
-                    raw.decode("utf-8")
-                )
+                new_json = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+                print("WRITE:", new_json[:200])
 
-                # obj["defectType"] = req.defectType
-                # print(
-                #     "OLD:",
-                #     obj
-                # )
-
-                
-
-                # ds[()] = json.dumps(
-                #     obj,
-                #     ensure_ascii=False
-                # ).encode("utf-8")
-
-                obj["defectType"] = req.defectType
-
-                print(
-                    "NEW JSON:",
-                    obj
-                )
-
-                new_json = json.dumps(
-                    obj,
-                    ensure_ascii=False
-                ).encode("utf-8")
-
-                print(
-                    "WRITE:",
-                    new_json[:200]
-                )
-
-                ds[()] = new_json
-
-                verify = ds[()]
-
-                print(
-                    "VERIFY:",
-                    verify[:200]
-                )
-
+                ds[()] = new_json   # 写回
+                verify = ds[()]     # 读回验证
+                print("VERIFY:", verify[:200])
                 print("SAVE DONE")
 
-                return {
-                    "success": True
-                }
+                return { "success": True }
 
             return {
                 "success": False,
@@ -330,13 +280,12 @@ async def save_defect_type(req: DefectTypeRequest):
             }
 
     except Exception as e:
-
         return {
             "success": False,
             "error": str(e)
         }
     
-
+# 全局标注修改后，下载
 @app.get("/download_nde")
 def download_nde():
     global current_file
@@ -371,7 +320,151 @@ def download_nde():
         media_type="application/octet-stream"
     )
 
+# endregion
 
+
+# ══════════════════════════════════════════════════
+# 2.缺陷标注系统
+# ══════════════════════════════════════════════════
+# region 缺陷标注系统
+
+# 单帧标签
+FRAME_LABEL_OPTIONS = [
+    {"value": -1, "label": "未标注"},
+    {"value": 0, "label": "无缺陷"},
+    {"value": 1, "label": "分层"},
+    {"value": 2, "label": "脱粘"},
+    {"value": 3, "label": "孔隙"},
+    {"value": 4, "label": "气孔"},
+    {"value": 5, "label": "夹杂"},
+    {"value": 6, "label": "纤维相关"},
+    {"value": 7, "label": "富树脂"},
+    {"value": 8, "label": "贫胶"},
+    {"value": 9, "label": "耦合不良"},
+    {"value": 10, "label": "噪音起始"},
+    {"value": 11, "label": "噪音中止"},
+    {"value": 12, "label": "波形过渡"},
+    {"value": 13, "label": "不可分类"},
+    {"value": 14, "label": "信号质量变化"},
+]
+
+# 从 .nde 文件中探测波形数据的总帧数
+def _get_n_frames_from_file(f: h5py.File) -> int:
+    """从打开的 HDF5 文件中获取帧数"""
+    for c in ["Public/Groups/0/Datasets/0-AScanAmplitude", "0-AScanAmplitude", "AScanAmplitude"]:
+        if c in f:
+            ds = f[c]
+            if ds.ndim == 3:
+                return ds.shape[0]
+            if ds.ndim == 2:
+                return ds.shape[0]
+            return 64
+    return 64
+
+# 确保 HDF5 文件中存在Private/FrameLabels
+def _ensure_frame_labels(f: h5py.File):
+    """确保 Private/FrameLabels 存在且形状正确，返回 (dataset, n_frames)"""
+    if "Private" not in f:
+        f.create_group("Private")
+    n = _get_n_frames_from_file(f)
+    if "Private/FrameLabels" not in f:
+        ds = f.create_dataset("Private/FrameLabels", (n,), dtype=np.int32, fillvalue=-1)
+    else:
+        ds = f["Private/FrameLabels"]
+    return ds, n
+
+# 自动标注算法
+#   前端：好帧索引+相似度阈值
+@app.post("/auto_label_frames")
+def auto_label_frames(req: dict):
+    """
+    自动标注：以用户标记的 OK 帧为基准，对其他帧进行相似性判断。
+    相似度 = 0.5×相关系数 + 0.15×均值差异 + 0.2×能量比 + 0.15×标准差比
+    """
+    global current_file
+    if not current_file or not os.path.exists(current_file):
+        return {"error": "没有已上传的文件"}
+
+    # 前端：好帧索引+相似度阈值
+    ok_idx = req.get("ok_frame_index")
+    if ok_idx is None:
+        return {"error": "缺少 ok_frame_index"}
+    threshold = req.get("similarity_threshold", 0.85)
+
+    try:
+        waveform = analyze_waveform_per_frame(current_file)
+        bscan = waveform["bscan"]
+        n_frames = len(bscan)
+
+        if ok_idx < 0 or ok_idx >= n_frames:
+            return {"error": f"ok_frame_index 超出范围 (0-{n_frames-1})"}
+
+        # 模板
+        ok_wave = np.array(bscan[ok_idx])
+        suggestions = []
+
+        # 遍历每一帧，计算相似度
+        for i in range(n_frames):
+            wave_i = np.array(bscan[i])
+
+            # 皮尔逊相关系数
+            if np.std(wave_i) > 1e-8 and np.std(ok_wave) > 1e-8:
+                corr = float(np.corrcoef(ok_wave, wave_i)[0, 1])
+            else:
+                corr = 0.0
+
+            # 特征差异
+            def _feat(w):
+                return {"mean": float(np.mean(w)), "std": float(np.std(w)), "energy": float(np.sum(w**2))}
+
+            f_ok = _feat(ok_wave)
+            f_i = _feat(wave_i)
+
+            mean_diff = 1 - min(abs(f_i["mean"] - f_ok["mean"]) / (abs(f_ok["mean"]) + 1e-6), 1)
+            energy_ratio = min(f_i["energy"] / (f_ok["energy"] + 1e-6), f_ok["energy"] / (f_i["energy"] + 1e-6))
+            std_ratio = min(f_i["std"] / (f_ok["std"] + 1e-6), f_ok["std"] / (f_i["std"] + 1e-6))
+
+            similarity = corr * 0.5 + mean_diff * 0.15 + energy_ratio * 0.2 + std_ratio * 0.15
+            similarity = max(0, min(1, similarity))
+
+            # 根据相似度决定自动标签
+            if i == ok_idx:
+                auto_label = 0
+                status = "reference"
+            elif similarity >= threshold:
+                auto_label = 0
+                status = "auto_ok"
+            else:
+                auto_label = -1
+                status = "pending"
+
+            suggestions.append({"frame": i, "similarity": round(similarity, 4), "auto_label": auto_label, "status": status})
+
+        # 自动保存到文件
+        auto_labels = [s["auto_label"] for s in suggestions]
+        try:
+            with h5py.File(current_file, "r+") as f:
+                ds, n = _ensure_frame_labels(f)
+                for s in suggestions:
+                    if s["auto_label"] == 0:
+                        ds[s["frame"]] = 0
+        except Exception:
+            pass
+
+        return {
+            "auto_labels": auto_labels,
+            "suggestions": suggestions,
+            "n_frames": n_frames,
+            "ok_frame_index": ok_idx,
+            "threshold": threshold,
+            "auto_ok_count": sum(1 for s in suggestions if s["status"] == "auto_ok"),
+            "pending_count": sum(1 for s in suggestions if s["status"] == "pending"),
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+# 批量改zip的全局缺陷类型，/GlobalLabel/defectType，并且修改文件名
 @app.post("/batch_save_defect_type")
 async def batch_save_defect_type(
     defectType: str = Form(...)
@@ -431,203 +524,7 @@ async def batch_save_defect_type(
 
     return FileResponse(output_zip, filename=f"batch_{defectType}.zip", media_type="application/zip")
 
-
-# ══════════════════════════════════════════════════
-# 模型训练 API
-# ══════════════════════════════════════════════════
-
-@app.get("/train/preview")
-def train_preview():
-    return preview_dataset()
-
-
-@app.post("/train/start")
-def train_start(req: dict):
-    job_id = start_train(req)
-    return {"job_id": job_id, "status": "pending"}
-
-
-@app.get("/train/status/{job_id}")
-def train_status(job_id: str):
-    return get_status(job_id)
-
-
-@app.get("/train/result/{job_id}")
-def train_result(job_id: str):
-    res = get_result(job_id)
-    if res is None:
-        return {"error": "result not available yet"}
-    return res
-
-
-@app.get("/train/models")
-def train_models():
-    return {"models": list_models()}
-
-
-@app.delete("/train/models/{model_name}")
-def train_delete_model(model_name: str):
-    delete_model(model_name)
-    return {"success": True}
-
-
-# ══════════════════════════════════════════════════
-# 模型测试 API
-# ══════════════════════════════════════════════════
-
-@app.get("/test/models")
-def test_models():
-    return {"models": list_models()}
-
-
-@app.post("/test/start")
-def test_start(req: dict):
-    job_id = start_test(req)
-    return {"job_id": job_id, "status": "pending"}
-
-
-@app.get("/test/status/{job_id}")
-def test_status(job_id: str):
-    return get_test_status(job_id)
-
-
-@app.get("/test/result/{job_id}")
-def test_result(job_id: str):
-    res = get_test_result(job_id)
-    if res is None:
-        return {"error": "result not available yet"}
-    return res
-
-
-@app.get("/test/file_preview")
-def test_file_preview(path: str):
-    """加载 .nde 文件的 B-scan / A-scan 数据"""
-    try:
-        data = load_file_for_preview(path)
-        return data
-    except (ValueError, FileNotFoundError) as e:
-        return {"error": str(e)}
-    except Exception as e:
-        return {"error": f"加载失败: {str(e)}"}
-
-
-@app.post("/chat/report")
-def chat_report(req: dict):
-    """生成并下载检测报告（含委托单数据）"""
-    global current_dispatch_data
-    try:
-        dispatch = req.get("dispatch_data") or current_dispatch_data or {}
-        report_path, report_id = generate_inspection_report(
-            filename=req.get("filename", "unknown.nde"),
-            meta=req.get("meta", {}),
-            signal_analysis=req.get("signal_analysis", ""),
-            defect_result=req.get("defect_result", ""),
-            confidence=req.get("confidence", 0),
-            model_name=req.get("model_name", ""),
-            dispatch_data=dispatch,
-        )
-        return {
-            "success": True,
-            "report_id": report_id,
-            "download_url": f"/chat/report/download/{report_id}",
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@app.get("/chat/report/download/{report_id}")
-def chat_report_download(report_id: str):
-    """下载检测报告"""
-    import glob as gglob
-    report_dir = os.path.join(os.path.dirname(__file__), "reports")
-    pattern = os.path.join(report_dir, f"{report_id}.docx")
-    matches = gglob.glob(pattern)
-    if not matches:
-        # 容错：旧版文件无 -01 后缀
-        if report_id.endswith('-01'):
-            base = report_id[:-3]
-            pattern = os.path.join(report_dir, f"{base}.docx")
-            matches = gglob.glob(pattern)
-    if not matches:
-        return {"error": "报告文件不存在"}
-    return FileResponse(
-        path=matches[0],
-        filename=f"检测报告_{report_id}.docx",
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    )
-
-
-@app.get("/chat/current_file")
-def chat_current_file():
-    """返回当前上传的文件信息"""
-    global current_file, current_filename
-    if current_file and os.path.exists(current_file):
-        # 读取部分元数据
-        meta = load_nde_meta(current_file)
-        # 从文件名解析基本参数
-        parts = []
-        if current_filename:
-            parts = current_filename.replace(".nde", "").split("_")
-        return {
-            "file_path": current_file,
-            "filename": current_filename,
-            "meta": {
-                "fiber": parts[0] if len(parts) > 0 else "-",
-                "matrix": parts[1] if len(parts) > 1 else "-",
-                "structure": parts[2] if len(parts) > 2 else "-",
-                "method": parts[3] if len(parts) > 3 else "-",
-                "defectType": parts[4] if len(parts) > 4 else "-",
-            },
-            "nde_meta": meta,
-        }
-    return {"file_path": None, "filename": None, "meta": None}
-
-
-FRAME_LABEL_OPTIONS = [
-    {"value": -1, "label": "未标注"},
-    {"value": 0, "label": "无缺陷"},
-    {"value": 1, "label": "分层"},
-    {"value": 2, "label": "脱粘"},
-    {"value": 3, "label": "孔隙"},
-    {"value": 4, "label": "气孔"},
-    {"value": 5, "label": "夹杂"},
-    {"value": 6, "label": "纤维相关"},
-    {"value": 7, "label": "富树脂"},
-    {"value": 8, "label": "贫胶"},
-    {"value": 9, "label": "耦合不良"},
-    {"value": 10, "label": "噪音起始"},
-    {"value": 11, "label": "噪音中止"},
-    {"value": 12, "label": "波形过渡"},
-    {"value": 13, "label": "不可分类"},
-    {"value": 14, "label": "信号质量变化"},
-]
-
-
-def _get_n_frames_from_file(f: h5py.File) -> int:
-    """从打开的 HDF5 文件中获取帧数"""
-    for c in ["Public/Groups/0/Datasets/0-AScanAmplitude", "0-AScanAmplitude", "AScanAmplitude"]:
-        if c in f:
-            ds = f[c]
-            if ds.ndim == 3:
-                return ds.shape[0]
-            if ds.ndim == 2:
-                return ds.shape[0]
-            return 64
-    return 64
-
-
-def _ensure_frame_labels(f: h5py.File):
-    """确保 Private/FrameLabels 存在且形状正确，返回 (dataset, n_frames)"""
-    if "Private" not in f:
-        f.create_group("Private")
-    n = _get_n_frames_from_file(f)
-    if "Private/FrameLabels" not in f:
-        ds = f.create_dataset("Private/FrameLabels", (n,), dtype=np.int32, fillvalue=-1)
-    else:
-        ds = f["Private/FrameLabels"]
-    return ds, n
-
-
+# 从当前文件的/Private/FrameLabels，获取逐帧标签
 @app.get("/get_frame_labels")
 def get_frame_labels():
     """读取当前文件的逐帧标签"""
@@ -647,7 +544,7 @@ def get_frame_labels():
     except Exception as e:
         return {"error": str(e)}
 
-
+# 保存单帧标签
 @app.post("/save_frame_label")
 def save_frame_label(req: dict):
     """保存某一帧的标签"""
@@ -668,7 +565,7 @@ def save_frame_label(req: dict):
     except Exception as e:
         return {"error": str(e)}
 
-
+# 保存多帧标签
 @app.post("/save_frame_labels_batch")
 def save_frame_labels_batch(req: dict):
     """批量保存帧标签"""
@@ -691,281 +588,233 @@ def save_frame_labels_batch(req: dict):
     except Exception as e:
         return {"error": str(e)}
 
-
+# 返回标签类型
 @app.get("/label_options")
 def label_options():
     """返回标签选项列表"""
     return {"options": FRAME_LABEL_OPTIONS}
 
-
-# ══════════════════════════════════════════════════
-# 自动标注 API
-# ══════════════════════════════════════════════════
-
-@app.post("/auto_label_frames")
-def auto_label_frames(req: dict):
-    """
-    自动标注：以用户标记的 OK 帧为基准，对其他帧进行相似性判断。
-    相似度 = 0.5×相关系数 + 0.15×均值差异 + 0.2×能量比 + 0.15×标准差比
-    """
-    global current_file
-    if not current_file or not os.path.exists(current_file):
-        return {"error": "没有已上传的文件"}
-
-    ok_idx = req.get("ok_frame_index")
-    if ok_idx is None:
-        return {"error": "缺少 ok_frame_index"}
-
-    threshold = req.get("similarity_threshold", 0.85)
-
-    try:
-        waveform = analyze_waveform_per_frame(current_file)
-        bscan = waveform["bscan"]
-        n_frames = len(bscan)
-
-        if ok_idx < 0 or ok_idx >= n_frames:
-            return {"error": f"ok_frame_index 超出范围 (0-{n_frames-1})"}
-
-        ok_wave = np.array(bscan[ok_idx])
-        suggestions = []
-
-        for i in range(n_frames):
-            wave_i = np.array(bscan[i])
-
-            # 相关系数
-            if np.std(wave_i) > 1e-8 and np.std(ok_wave) > 1e-8:
-                corr = float(np.corrcoef(ok_wave, wave_i)[0, 1])
-            else:
-                corr = 0.0
-
-            # 特征差异
-            def _feat(w):
-                return {"mean": float(np.mean(w)), "std": float(np.std(w)), "energy": float(np.sum(w**2))}
-
-            f_ok = _feat(ok_wave)
-            f_i = _feat(wave_i)
-
-            mean_diff = 1 - min(abs(f_i["mean"] - f_ok["mean"]) / (abs(f_ok["mean"]) + 1e-6), 1)
-            energy_ratio = min(f_i["energy"] / (f_ok["energy"] + 1e-6), f_ok["energy"] / (f_i["energy"] + 1e-6))
-            std_ratio = min(f_i["std"] / (f_ok["std"] + 1e-6), f_ok["std"] / (f_i["std"] + 1e-6))
-
-            similarity = corr * 0.5 + mean_diff * 0.15 + energy_ratio * 0.2 + std_ratio * 0.15
-            similarity = max(0, min(1, similarity))
-
-            if i == ok_idx:
-                auto_label = 0
-                status = "reference"
-            elif similarity >= threshold:
-                auto_label = 0
-                status = "auto_ok"
-            else:
-                auto_label = -1
-                status = "pending"
-
-            suggestions.append({"frame": i, "similarity": round(similarity, 4), "auto_label": auto_label, "status": status})
-
-        auto_labels = [s["auto_label"] for s in suggestions]
-
-        # 自动保存到文件
-        try:
-            with h5py.File(current_file, "r+") as f:
-                ds, n = _ensure_frame_labels(f)
-                for s in suggestions:
-                    if s["auto_label"] == 0:
-                        ds[s["frame"]] = 0
-        except Exception:
-            pass
-
-        return {
-            "auto_labels": auto_labels,
-            "suggestions": suggestions,
-            "n_frames": n_frames,
-            "ok_frame_index": ok_idx,
-            "threshold": threshold,
-            "auto_ok_count": sum(1 for s in suggestions if s["status"] == "auto_ok"),
-            "pending_count": sum(1 for s in suggestions if s["status"] == "pending"),
-        }
-
-    except Exception as e:
-        return {"error": str(e)}
+# endregion
 
 
 # ══════════════════════════════════════════════════
-# 验收判定 API
+# 3.数据库概览
 # ══════════════════════════════════════════════════
+# region 数据库概览
 
-_checker = None
+def get_dataset_summary():
+    """扫描 dataset/ 目录，返回数据集概要信息"""
+    import re
+    base = os.path.join(os.path.dirname(__file__), "..", "dataset")
+    if not os.path.isdir(base):
+        return None
 
-def get_checker():
-    global _checker
-    if _checker is None:
-        _checker = AcceptanceChecker()
-    return _checker
+    pattern = re.compile(
+        r"^(\w+)_(\w+)_(\w+)_(\w+)_(\w+)_(\w+)_(\d{14})_(.+)\.nde$"
+    )
 
+    defect_types = set()
+    fibers = set()
+    matrixes = set()
+    structures = set()
+    methods = set()
+    total = 0
+    by_defect = {}
 
-@app.get("/acceptance/standards")
-def acceptance_standards():
-    """列出所有可用的验收标准"""
-    try:
-        checker = get_checker()
-        return {"standards": checker.get_index()}
-    except Exception as e:
-        return {"error": str(e)}
+    # 遍历子目录
+    for defect_dir in sorted(os.listdir(base)):
+        dir_path = os.path.join(base, defect_dir)
+        if not os.path.isdir(dir_path):
+            continue
+        nde_files = [f for f in os.listdir(dir_path) if f.lower().endswith(".nde")]
+        if not nde_files:
+            continue
 
+        count = 0
+        for fname in nde_files:
+            m = pattern.match(fname)
+            if m:
+                fibers.add(m.group(1))
+                matrixes.add(m.group(2))
+                structures.add(m.group(3))
+                methods.add(m.group(4))
+                defect_types.add(m.group(5))
+            count += 1
+        by_defect[defect_dir] = count
+        total += count
 
-@app.post("/acceptance/check")
-def acceptance_check(req: dict):
-    """验收判定"""
-    global current_file
-    standard_id = req.get("standard_id", "")
-    defect_type = req.get("defect_type", "")
-    defect_type_en = req.get("defect_type_en", "")
-
-    if not standard_id:
-        return {"error": "缺少 standard_id"}
-
-    try:
-        # 构建信号特征
-        signal_features = {}
-        if current_file and os.path.exists(current_file):
-            try:
-                signal = analyze_signal(current_file)
-                if signal:
-                    signal_features = {k: v for k, v in signal.items() if isinstance(v, (int, float))}
-                    signal_features["detected_frames"] = 64
-            except Exception:
-                pass
-
-        # 如果请求中有额外的特征数据，合并进来
-        req_features = req.get("signal_features", {})
-        if req_features:
-            signal_features.update(req_features)
-
-        detection_result = {
-            "defect_type": defect_type,
-            "defect_type_en": defect_type_en,
-            "confidence": req.get("confidence", 0),
-            "signal_features": signal_features,
-            "prediction": req.get("prediction", {}),
-        }
-
-        checker = get_checker()
-        result = checker.check(standard_id, detection_result)
-        return result
-
-    except Exception as e:
-        return {"error": str(e)}
-
-
-@app.post("/acceptance/suggest_standard")
-def acceptance_suggest_standard(req: dict):
-    """根据材料信息自动推荐验收标准"""
-    try:
-        checker = get_checker()
-        meta = req.get("meta", {})
-        std_id = checker.suggest_standard(meta)
-        return {"standard_id": std_id}
-    except Exception as e:
-        return {"error": str(e)}
-
-
-# ══════════════════════════════════════════════════
-# 争议项 API（用户对模型预测有异议时登记）
-# ══════════════════════════════════════════════════
-
-DISPUTES_DIR = os.path.join(os.path.dirname(__file__), "disputes")
-os.makedirs(DISPUTES_DIR, exist_ok=True)
-
-
-@app.post("/dispute/submit")
-async def dispute_submit(
-    file: UploadFile = File(None),
-    description: str = Form(""),
-    original_prediction: str = Form(""),
-    user_claim: str = Form(""),
-    original_file: str = Form(""),
-):
-    """登记争议项，可选上传证据 ZIP"""
-    import uuid
-    dispute_id = f"DSP-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
-    dispute_dir = os.path.join(DISPUTES_DIR, dispute_id)
-    os.makedirs(dispute_dir, exist_ok=True)
-
-    evidence_path = None
-    if file and file.filename:
-        ext = os.path.splitext(file.filename)[1].lower()
-        if ext == ".zip":
-            evidence_path = os.path.join(dispute_dir, f"evidence{ext}")
-            with open(evidence_path, "wb") as f:
-                f.write(await file.read())
-
-    # 复制当前 .nde 文件到争议目录
-    nde_copy_path = None
-    nde_filename = original_file
-    if current_file and os.path.exists(current_file):
-        nde_filename = original_file or os.path.basename(current_file)
-        nde_copy_path = os.path.join(dispute_dir, nde_filename)
-        shutil.copy2(current_file, nde_copy_path)
-
-    metadata = {
-        "dispute_id": dispute_id,
-        "timestamp": datetime.now().isoformat(),
-        "original_file": nde_filename,
-        "original_prediction": original_prediction,
-        "user_claim": user_claim,
-        "user_description": description,
-        "evidence_file": evidence_path,
-        "nde_file": nde_copy_path,
-        "status": "待仲裁",
-        "status": "待仲裁",
+    return {
+        "total_files": total,
+        "defect_types": sorted(defect_types),
+        "by_defect": by_defect,
+        "fibers": sorted(fibers),
+        "matrixes": sorted(matrixes),
+        "structures": sorted(structures),
+        "methods": sorted(methods),
     }
-    with open(os.path.join(dispute_dir, "metadata.json"), "w", encoding="utf-8") as f:
-        json.dump(metadata, f, ensure_ascii=False, indent=2)
 
-    return {"success": True, "dispute_id": dispute_id, "status": "待仲裁"}
+# 生成数据集的概要统计
+@app.get("/dataset_overview")
+def dataset_overview():
+    import re
+
+    base = os.path.join(os.path.dirname(__file__), "..", "dataset")
+    result = {
+        "total_files": 0,
+        "by_defect": {},   # OK: {count, files: [...]}
+        "files": []
+    }
+
+    # 命名规则: {纤维类型}_{基体类型}_{结构}_{检测方法}_{缺陷类型}_{型号}_{时间戳}.nde
+    pattern = re.compile(
+        r"^(\w+)_(\w+)_(\w+)_(\w+)_(\w+)_(\w+)_(\d{14})_(.+)\.nde$"
+    )
+
+    if not os.path.isdir(base):
+        return {"error": "dataset dir not found"}
+
+    # 遍历目录，子目录代表一种缺陷类型
+    for defect_dir in sorted(os.listdir(base)):
+        dir_path = os.path.join(base, defect_dir)
+        if not os.path.isdir(dir_path):
+            continue
+        nde_list = [f for f in os.listdir(dir_path) if f.lower().endswith(".nde")]
+        if not nde_list:
+            continue
+
+        files_info = []
+        for fname in sorted(nde_list):
+            m = pattern.match(fname)
+            if m:
+                files_info.append({
+                    "filename": fname,
+                    "fiber": m.group(1),
+                    "matrix": m.group(2),
+                    "structure": m.group(3),
+                    "method": m.group(4),
+                    "defect": m.group(5),
+                    "model": m.group(6),
+                    "timestamp": m.group(7),
+                    "extra": m.group(8)
+                })
+            else:
+                files_info.append({
+                    "filename": fname,
+                    "fiber": "-",
+                    "matrix": "-",
+                    "structure": "-",
+                    "method": "-",
+                    "defect": defect_dir,
+                    "model": "-",
+                    "timestamp": "-",
+                    "extra": "-"
+                })
+
+        result["by_defect"][defect_dir] = {
+            "count": len(files_info),
+            "files": files_info
+        }
+        result["files"].extend(files_info)
+        result["total_files"] += len(files_info)
+
+    return result
+
+# endregion
 
 
 # ══════════════════════════════════════════════════
-# 委托单上传 API
+# 4.模型训练 API
 # ══════════════════════════════════════════════════
+# region 模型训练API
 
-@app.post("/dispatch/upload")
-async def dispatch_upload(file: UploadFile = File(...)):
-    """上传已填写的委托单 .doc 文件，解析字段"""
-    global current_dispatch_data
-    if not file.filename.endswith('.doc'):
-        return {"success": False, "error": "仅支持 .doc 格式的委托单文件"}
+# 数据集统计 TODO:
+@app.get("/train/preview")
+def train_preview():
+    return preview_dataset()
 
-    import tempfile
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.doc')
-    tmp.write(await file.read())
-    tmp.close()
+# 异步启动训练，立即返回job_id
+@app.post("/train/start")
+def train_start(req: dict):
+    job_id = start_train(req)
+    return {"job_id": job_id, "status": "pending"}
 
+# 训练进度
+@app.get("/train/status/{job_id}")
+def train_status(job_id: str):
+    return get_status(job_id)
+
+# 训练结果
+@app.get("/train/result/{job_id}")
+def train_result(job_id: str):
+    res = get_result(job_id)
+    if res is None:
+        return {"error": "result not available yet"}
+    return res
+
+# 列出已训练模型
+@app.get("/train/models")
+def train_models():
+    return {"models": list_models()}
+
+# 删除已训练模型
+@app.delete("/train/models/{model_name}")
+def train_delete_model(model_name: str):
+    delete_model(model_name)    # 删pkl/pt+json
+    return {"success": True}
+
+# endregion
+
+
+# ══════════════════════════════════════════════════
+# 5.模型测试 API
+# ══════════════════════════════════════════════════
+# region 模型测试API
+
+# 列出测试模型
+@app.get("/test/models")
+def test_models():
+    return {"models": list_models()}
+
+# 异步测试
+@app.post("/test/start")
+def test_start(req: dict):
+    job_id = start_test(req)
+    return {"job_id": job_id, "status": "pending"}
+
+# 测试状态
+@app.get("/test/status/{job_id}")
+def test_status(job_id: str):
+    return get_test_status(job_id)
+
+# 测试结果
+@app.get("/test/result/{job_id}")
+def test_result(job_id: str):
+    res = get_test_result(job_id)
+    if res is None:
+        return {"error": "result not available yet"}
+    return res
+
+# 预览单文件
+@app.get("/test/file_preview")
+def test_file_preview(path: str):
+    """加载 .nde 文件的 B-scan / A-scan 数据"""
     try:
-        data = parse_dispatch_doc(tmp.name)
-        current_dispatch_data = data
-        os.unlink(tmp.name)
-        return {"success": True, "fields": data, "message": "委托单解析成功"}
+        data = load_file_for_preview(path)
+        return data
+    except (ValueError, FileNotFoundError) as e:
+        return {"error": str(e)}
     except Exception as e:
-        os.unlink(tmp.name)
-        return {"success": False, "error": f"委托单解析失败: {str(e)}"}
+        return {"error": f"加载失败: {str(e)}"}
+
+# endregion
 
 
+# ══════════════════════════════════════════════════
+# 6. 智能评估 AI流式对话结果评估
+# ══════════════════════════════════════════════════
+# region 流式对话结果评估
 
-@app.get("/dispute/list")
-def dispute_list():
-    """列出所有争议项"""
-    disputes = []
-    if not os.path.isdir(DISPUTES_DIR):
-        return {"disputes": []}
-    for dname in sorted(os.listdir(DISPUTES_DIR), reverse=True):
-        meta_path = os.path.join(DISPUTES_DIR, dname, "metadata.json")
-        if os.path.exists(meta_path):
-            with open(meta_path, "r", encoding="utf-8") as f:
-                disputes.append(json.load(f))
-    return {"disputes": disputes}
-
-
+# 
 @app.get("/chat/signal_waveform")
 def chat_signal_waveform():
     """返回当前文件的 A-Scan 全量波形数据和逐帧异常信息"""
@@ -982,7 +831,7 @@ def chat_signal_waveform():
     except Exception as e:
         return {"error": f"分析失败: {str(e)}"}
 
-
+#
 @app.post("/chat/ask")
 async def chat_ask(req: dict):
     """智能评估对话接口（SSE 流式）"""
@@ -1352,118 +1201,256 @@ async def chat_ask(req: dict):
 
     return StreamingResponse(text_generator(), media_type="text/plain")
 
-
-def get_dataset_summary():
-    """扫描 dataset/ 目录，返回数据集概要信息"""
-    import re
-    base = os.path.join(os.path.dirname(__file__), "..", "dataset")
-    if not os.path.isdir(base):
-        return None
-
-    pattern = re.compile(
-        r"^(\w+)_(\w+)_(\w+)_(\w+)_(\w+)_(\w+)_(\d{14})_(.+)\.nde$"
-    )
-
-    defect_types = set()
-    fibers = set()
-    matrixes = set()
-    structures = set()
-    methods = set()
-    total = 0
-    by_defect = {}
-
-    for defect_dir in sorted(os.listdir(base)):
-        dir_path = os.path.join(base, defect_dir)
-        if not os.path.isdir(dir_path):
-            continue
-        nde_files = [f for f in os.listdir(dir_path) if f.lower().endswith(".nde")]
-        if not nde_files:
-            continue
-
-        count = 0
-        for fname in nde_files:
-            m = pattern.match(fname)
-            if m:
-                fibers.add(m.group(1))
-                matrixes.add(m.group(2))
-                structures.add(m.group(3))
-                methods.add(m.group(4))
-                defect_types.add(m.group(5))
-            count += 1
-        by_defect[defect_dir] = count
-        total += count
-
-    return {
-        "total_files": total,
-        "defect_types": sorted(defect_types),
-        "by_defect": by_defect,
-        "fibers": sorted(fibers),
-        "matrixes": sorted(matrixes),
-        "structures": sorted(structures),
-        "methods": sorted(methods),
-    }
-
-
-@app.get("/dataset_overview")
-def dataset_overview():
-    import re
-
-    base = os.path.join(os.path.dirname(__file__), "..", "dataset")
-    result = {
-        "total_files": 0,
-        "by_defect": {},   # OK: {count, files: [...]}
-        "files": []
-    }
-
-    # 命名规则: {纤维类型}_{基体类型}_{结构}_{检测方法}_{缺陷类型}_{型号}_{时间戳}.nde
-    pattern = re.compile(
-        r"^(\w+)_(\w+)_(\w+)_(\w+)_(\w+)_(\w+)_(\d{14})_(.+)\.nde$"
-    )
-
-    if not os.path.isdir(base):
-        return {"error": "dataset dir not found"}
-
-    for defect_dir in sorted(os.listdir(base)):
-        dir_path = os.path.join(base, defect_dir)
-        if not os.path.isdir(dir_path):
-            continue
-        nde_list = [f for f in os.listdir(dir_path) if f.lower().endswith(".nde")]
-        if not nde_list:
-            continue
-
-        files_info = []
-        for fname in sorted(nde_list):
-            m = pattern.match(fname)
-            if m:
-                files_info.append({
-                    "filename": fname,
-                    "fiber": m.group(1),
-                    "matrix": m.group(2),
-                    "structure": m.group(3),
-                    "method": m.group(4),
-                    "defect": m.group(5),
-                    "model": m.group(6),
-                    "timestamp": m.group(7),
-                    "extra": m.group(8)
-                })
-            else:
-                files_info.append({
-                    "filename": fname,
-                    "fiber": "-",
-                    "matrix": "-",
-                    "structure": "-",
-                    "method": "-",
-                    "defect": defect_dir,
-                    "model": "-",
-                    "timestamp": "-",
-                    "extra": "-"
-                })
-
-        result["by_defect"][defect_dir] = {
-            "count": len(files_info),
-            "files": files_info
+# 生成报告
+@app.post("/chat/report")
+def chat_report(req: dict):
+    """生成并下载检测报告（含委托单数据）"""
+    global current_dispatch_data
+    try:
+        dispatch = req.get("dispatch_data") or current_dispatch_data or {}
+        report_path, report_id = generate_inspection_report(
+            filename=req.get("filename", "unknown.nde"),
+            meta=req.get("meta", {}),
+            signal_analysis=req.get("signal_analysis", ""),
+            defect_result=req.get("defect_result", ""),
+            confidence=req.get("confidence", 0),
+            model_name=req.get("model_name", ""),
+            dispatch_data=dispatch,
+        )
+        return {
+            "success": True,
+            "report_id": report_id,
+            "download_url": f"/chat/report/download/{report_id}",
         }
-        result["files"].extend(files_info)
-        result["total_files"] += len(files_info)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
-    return result
+# 下载报告
+@app.get("/chat/report/download/{report_id}")
+def chat_report_download(report_id: str):
+    """下载检测报告"""
+    import glob as gglob
+    report_dir = os.path.join(os.path.dirname(__file__), "reports")
+    pattern = os.path.join(report_dir, f"{report_id}.docx")
+    matches = gglob.glob(pattern)
+    if not matches:
+        # 容错：旧版文件无 -01 后缀
+        if report_id.endswith('-01'):
+            base = report_id[:-3]
+            pattern = os.path.join(report_dir, f"{base}.docx")
+            matches = gglob.glob(pattern)
+    if not matches:
+        return {"error": "报告文件不存在"}
+    return FileResponse(
+        path=matches[0],
+        filename=f"检测报告_{report_id}.docx",
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+# 解析nde
+@app.get("/chat/current_file")
+def chat_current_file():
+    """返回当前上传的文件信息"""
+    global current_file, current_filename
+    if current_file and os.path.exists(current_file):
+        # 读取部分元数据
+        meta = load_nde_meta(current_file)
+        # 从文件名解析基本参数
+        parts = []
+        if current_filename:
+            parts = current_filename.replace(".nde", "").split("_")
+        return {
+            "file_path": current_file,
+            "filename": current_filename,
+            "meta": {
+                "fiber": parts[0] if len(parts) > 0 else "-",
+                "matrix": parts[1] if len(parts) > 1 else "-",
+                "structure": parts[2] if len(parts) > 2 else "-",
+                "method": parts[3] if len(parts) > 3 else "-",
+                "defectType": parts[4] if len(parts) > 4 else "-",
+            },
+            "nde_meta": meta,
+        }
+    return {"file_path": None, "filename": None, "meta": None}
+
+
+# endregion
+
+
+# ══════════════════════════════════════════════════
+# 7.验收判定 API
+# ══════════════════════════════════════════════════
+# region 验收判定
+
+_checker = None
+
+def get_checker():
+    global _checker
+    if _checker is None:
+        _checker = AcceptanceChecker()
+    return _checker
+
+# 列出验收文件
+@app.get("/acceptance/standards")
+def acceptance_standards():
+    """列出所有可用的验收标准"""
+    try:
+        checker = get_checker()
+        return {"standards": checker.get_index()}
+    except Exception as e:
+        return {"error": str(e)}
+
+# 执行缺陷判定
+@app.post("/acceptance/check")
+def acceptance_check(req: dict):
+    """验收判定"""
+    global current_file
+    standard_id = req.get("standard_id", "")
+    defect_type = req.get("defect_type", "")
+    defect_type_en = req.get("defect_type_en", "")
+
+    if not standard_id:
+        return {"error": "缺少 standard_id"}
+
+    try:
+        # 构建信号特征
+        signal_features = {}
+        if current_file and os.path.exists(current_file):
+            try:
+                signal = analyze_signal(current_file)
+                if signal:
+                    signal_features = {k: v for k, v in signal.items() if isinstance(v, (int, float))}
+                    signal_features["detected_frames"] = 64
+            except Exception:
+                pass
+
+        # 如果请求中有额外的特征数据，合并进来
+        req_features = req.get("signal_features", {})
+        if req_features:
+            signal_features.update(req_features)
+
+        detection_result = {
+            "defect_type": defect_type,
+            "defect_type_en": defect_type_en,
+            "confidence": req.get("confidence", 0),
+            "signal_features": signal_features,
+            "prediction": req.get("prediction", {}),
+        }
+
+        checker = get_checker()
+        result = checker.check(standard_id, detection_result)
+        return result
+
+    except Exception as e:
+        return {"error": str(e)}
+
+# 根据nde自动选择验收文件
+@app.post("/acceptance/suggest_standard")
+def acceptance_suggest_standard(req: dict):
+    """根据材料信息自动推荐验收标准"""
+    try:
+        checker = get_checker()
+        meta = req.get("meta", {})
+        std_id = checker.suggest_standard(meta)
+        return {"standard_id": std_id}
+    except Exception as e:
+        return {"error": str(e)}
+
+# endregion
+
+
+# ══════════════════════════════════════════════════
+# 8.缺陷争议处理 API
+# ══════════════════════════════════════════════════
+# region 缺陷争议处理
+
+DISPUTES_DIR = os.path.join(os.path.dirname(__file__), "disputes")
+os.makedirs(DISPUTES_DIR, exist_ok=True)
+
+# 提交争议
+@app.post("/dispute/submit")
+async def dispute_submit(
+    file: UploadFile = File(None),
+    description: str = Form(""),
+    original_prediction: str = Form(""),
+    user_claim: str = Form(""),
+    original_file: str = Form(""),
+):
+    """登记争议项，可选上传证据 ZIP"""
+    import uuid
+    dispute_id = f"DSP-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    dispute_dir = os.path.join(DISPUTES_DIR, dispute_id)
+    os.makedirs(dispute_dir, exist_ok=True)
+
+    evidence_path = None
+    if file and file.filename:
+        ext = os.path.splitext(file.filename)[1].lower()
+        if ext == ".zip":
+            evidence_path = os.path.join(dispute_dir, f"evidence{ext}")
+            with open(evidence_path, "wb") as f:
+                f.write(await file.read())
+
+    # 复制当前 .nde 文件到争议目录
+    nde_copy_path = None
+    nde_filename = original_file
+    if current_file and os.path.exists(current_file):
+        nde_filename = original_file or os.path.basename(current_file)
+        nde_copy_path = os.path.join(dispute_dir, nde_filename)
+        shutil.copy2(current_file, nde_copy_path)
+
+    metadata = {
+        "dispute_id": dispute_id,
+        "timestamp": datetime.now().isoformat(),
+        "original_file": nde_filename,
+        "original_prediction": original_prediction,
+        "user_claim": user_claim,
+        "user_description": description,
+        "evidence_file": evidence_path,
+        "nde_file": nde_copy_path,
+        "status": "待仲裁",
+        "status": "待仲裁",
+    }
+    with open(os.path.join(dispute_dir, "metadata.json"), "w", encoding="utf-8") as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+    return {"success": True, "dispute_id": dispute_id, "status": "待仲裁"}
+
+# 列出所有争议
+@app.get("/dispute/list")
+def dispute_list():
+    """列出所有争议项"""
+    disputes = []
+    if not os.path.isdir(DISPUTES_DIR):
+        return {"disputes": []}
+    for dname in sorted(os.listdir(DISPUTES_DIR), reverse=True):
+        meta_path = os.path.join(DISPUTES_DIR, dname, "metadata.json")
+        if os.path.exists(meta_path):
+            with open(meta_path, "r", encoding="utf-8") as f:
+                disputes.append(json.load(f))
+    return {"disputes": disputes}
+
+# 解析委托单
+@app.post("/dispatch/upload")
+async def dispatch_upload(file: UploadFile = File(...)):
+    """上传已填写的委托单 .doc 文件，解析字段"""
+    global current_dispatch_data
+    if not file.filename.endswith('.doc'):
+        return {"success": False, "error": "仅支持 .doc 格式的委托单文件"}
+
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.doc')
+    tmp.write(await file.read())
+    tmp.close()
+
+    try:
+        data = parse_dispatch_doc(tmp.name)
+        current_dispatch_data = data
+        os.unlink(tmp.name)
+        return {"success": True, "fields": data, "message": "委托单解析成功"}
+    except Exception as e:
+        os.unlink(tmp.name)
+        return {"success": False, "error": f"委托单解析失败: {str(e)}"}
+
+# endregion
+
+
