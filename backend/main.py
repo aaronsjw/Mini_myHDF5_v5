@@ -36,6 +36,12 @@ from signal_analysis import analyze_signal, load_nde_meta, analyze_waveform_per_
 from deepseek_client import chat_stream
 ## 验收判定
 from acceptance_checker import AcceptanceChecker
+## 提示词模板
+from prompts import (
+    build_system_prompt, build_no_file_prompt,
+    build_dataset_block, build_acceptance_index_block, build_acceptance_result_block,
+    build_dispute_block, build_dispatch_block, build_local_model_content,
+)
 
 ## 请求体模型
 from pydantic import BaseModel      # 前后端交互的数据规范化
@@ -931,96 +937,14 @@ async def chat_ask(req: dict):
             pred_lines.append(f"- 使用模型：{prediction['model_name']}")
 
         # 构造 system prompt
-        system_prompt = f"""你是复合材料智能检测与评估助手小史。你的任务是根据提供的 .nde 文件信号特征和模型预测结果，综合分析是否存在缺陷以及缺陷类型。
-
-## 材料与检测参数
-{chr(10).join(meta_lines) if meta_lines else "- 未获取到详细参数"}
-
-## 信号特征
-{chr(10).join(signal_lines) if signal_lines else "- 信号分析未完成"}
-
-## 模型预测输出
-{chr(10).join(pred_lines) if pred_lines else "- 无可用模型预测结果"}
-"""
-
-        if prediction and "error" not in prediction and prediction['confidence'] > 0.6:
-            system_prompt += f"""
-## 分析规则
-1. 依据上述信号特征和模型输出进行分析，给出详细结论
-2. **直接说出模型预测结果**，例如"模型判定为**分层(Dl)**，置信度85%"，然后从信号层面解释依据
-3. **语气肯定、专业**。你是有数据支撑的分析系统，不是征求意见的助手
-4. 必须从信号层面解释：回波特征、幅值变化、底波衰减、异常区域等
-5. 分析要详细、专业，涵盖材料参数、信号特征、缺陷判断、置信度评估
-6. 用中文回复，适当使用 Markdown 格式（标题、加粗、列表、引用等）
-7. 如果置信度低于60%，要提示"需要进一步确认"
-8. **重要：Dl=分层(Delamination)，Db=脱粘(Debonding)。不要在回复中把 Dl 和 Db 的中文名搞反！**
-
-## 用户质疑时的处理规则（当用户说"不对/不是/应该是/改成"时）
-**核心原则：你是有数据支撑的检测分析系统，不是聊天机器人。模型判定是当前最佳结论，不容轻易推翻。**
-
-当用户质疑时，按以下模板回复，**直接填充具体数据**，不要自由发挥：
-
-> 我理解您的看法，但根据信号分析数据，模型判定为**【缺陷类型】**，置信度**【XX%】**，理由如下：
-> - 底波能量比：【数值】（阈值【X】，结论）
-> - 幅值衰减：【数值】（阈值【X】，结论）
-> - 连续异常帧数：【数值】（阈值【X】，结论）
-> - 【其他关键信号特征】
->
-> 如果您坚持认为是【用户主张的缺陷类型】，请上传C扫描图像、金相照片或其他NDE方法结果，打包为ZIP文件并附上说明。系统将登记为**争议项**保留备查。在仲裁结果出来前，文件标签保持当前判定结果不变。
-
-**绝对禁止**使用的措辞：
-❌ "您说得对" / "您说得有道理"
-❌ "可能是我判断错了" / "我重新分析一下"
-❌ "也有这种可能" / "不排除您的看法"
-❌ "让我再看看" / "我再检查一下"
-❌ 任何形式的认错、让步、自我怀疑
-
-**必须做到**：
-✅ 第一句就重申模型判定结果，不绕弯子
-✅ 至少引用 2-3 个具体信号数值作为依据
-✅ 结尾明确要求上传 ZIP 证据
-✅ 语气像"有经验的检测工程师坚持自己的专业判断"
-"""
-        else:
-            system_prompt += f"""
-## 分析规则
-1. 依据上述信号特征进行分析，给出初步结论
-2. 坦诚告知模型预测置信度不足，建议进一步检测
-3. 用中文回复，适当使用 Markdown 格式
-"""
+        system_prompt = build_system_prompt(meta_lines, signal_lines, pred_lines, prediction)
 
     else:
         # 无文件：通用助手指令
-        system_prompt = """你是复合材料智能检测与评估助手小史。你可以：
-1. 介绍复合材料超声检测的相关知识
-2. 解释常见的缺陷类型（分层、脱粘、气孔、夹杂等）
-3. 回答关于 NDE 检测工艺的问题
-4. 引导用户上传 .nde 文件进行具体分析
-
-当用户询问缩写含义时，可参考以下信息：
-- 缺陷类型：OK=好区, Dl=分层, Db=脱粘, Po=孔隙, Vo=气孔, In=夹杂, Fb=纤维相关, Rs=树脂相关, Cp=耦合不良, Uc=不可识别
-- 纤维类型：CF=碳纤维, GF=玻璃纤维, BF=硼纤维, AF=芳纶纤维, C/SiC=碳/碳化硅
-- 基体类型：EP=环氧, BMI=双马, PI=聚酰亚胺, TP=热塑, SiC=碳化硅
-- 结构：Plate=平板, Taper=变厚度平板, RZone=R区, BondPP=板板胶接, BondSC=板芯胶接, Hybrid=混杂铺层
-- 检测方法：WRUT=水耦合反射/水浸, WPUT=水穿透, DBUT=延迟块耦合, PAUT=相控阵, AUT=空耦, LUT=激光
-
-请用中文回复，适当使用 Markdown 格式。如果用户询问具体文件分析，请提醒用户上传 .nde 文件。"""
+        system_prompt = build_no_file_prompt()
     # 如果询问数据库信息，追加数据集描述
     if dataset_info:
-        defect_detail = "、".join([f"{k}({v}个)" for k, v in dataset_info["by_defect"].items()])
-        dataset_block = f"""
-
-## 数据集概况（当前数据库）
-- 总文件数：{dataset_info['total_files']} 个 .nde 文件
-- 缺陷类型：{", ".join(dataset_info['defect_types'])}
-- 各类缺陷分布：{defect_detail}
-- 纤维类型：{", ".join(dataset_info['fibers'])}
-- 基体类型：{", ".join(dataset_info['matrixes'])}
-- 结构类型：{", ".join(dataset_info['structures'])}
-- 检测方法：{", ".join(dataset_info['methods'])}
-
-请根据以上真实数据回答用户的问题。"""
-        system_prompt += dataset_block
+        system_prompt += build_dataset_block(dataset_info)
 
     # 验收标准相关查询（对话式）
     acceptance_keywords = ['验收', '验收标准', '验收文件', '超标', '合格判定', '验收判定', '标准文件']
@@ -1032,11 +956,7 @@ async def chat_ask(req: dict):
             checker = get_checker()
             idx = checker.get_index()
             if idx:
-                lines = ["\n\n## 验收标准信息\n当前系统中有以下验收标准："]
-                for s in idx:
-                    mats = "、".join(s.get("applicable_materials", []))
-                    lines.append(f"- **{s['id']}**: {s['name']}" + (f"（适用材料: {mats}）" if mats else ""))
-                acceptance_ctx = "\n".join(lines)
+                acceptance_ctx = build_acceptance_index_block(idx)
 
                 # 判断是否需要执行判定（用户问"依据XX标准是否超标"之类）
                 do_check = any(k in question for k in ["超标", "合格", "判定", "依据", "按", "合不合格", "过不过"])
@@ -1069,18 +989,7 @@ async def chat_ask(req: dict):
                         "signal_features": sf,
                         "prediction": {},
                     })
-                    acceptance_ctx += f"\n\n## 验收判定结果（请用自然语言向用户解释）\n"
-                    acceptance_ctx += f"- 标准：{res['standard_id']} - {res['standard_name']}\n"
-                    acceptance_ctx += f"- 缺陷类型：{dt or '未知'}\n"
-                    status = "✅ 合格" if res['passed'] is True else "❌ 不合格" if res['passed'] is False else "⚠️ 无法判定"
-                    acceptance_ctx += f"- 判定：{status}\n"
-                    acceptance_ctx += f"- 理由：{res['reason']}\n"
-                    for v in res.get('violations', []):
-                        acceptance_ctx += f"  - [{v['level']}级] {v['description']}（{v['action']}）\n"
-                    for sug in res.get('suggestions', []):
-                        acceptance_ctx += f"  - 💡 {sug}\n"
-                    if res.get('needs_cscan'):
-                        acceptance_ctx += "  - ⚠ 需要 CScan 确认缺陷尺寸\n"
+                    acceptance_ctx += build_acceptance_result_block(res, dt)
         except Exception:
             acceptance_ctx = ""
 
@@ -1102,19 +1011,7 @@ async def chat_ask(req: dict):
                         with open(meta_path, "r", encoding="utf-8") as f:
                             disputes.append(_json.load(f))
             if disputes:
-                dispute_ctx = "\n\n以下争议项数据已按表格排列，请照原样输出各行的内容（文件名较长部分用空格分隔，换两行显示）：\n\n"
-                dispute_ctx += "| 序号 | 争议项编号 | 文件 | 原始标签 | 争议意见 | 仲裁状态 | 有C扫 | 有A扫 |\n"
-                dispute_ctx += "|------|------------|------|----------|----------|----------|-------|-------|\n"
-                for i, d in enumerate(disputes, 1):
-                    fname = d['original_file']
-                    # 按文件名规范在时间戳前断开：找到 _YYYYMMDDHHMMSS_ 位置
-                    ts_match = re.search(r'(_)(\d{14})_', fname)
-                    if ts_match:
-                        brk = ts_match.start(1)
-                        fname = fname[:brk] + ' ' + fname[brk:]
-                    has_evidence = "✅有" if d.get('evidence_file') else "❌无"
-                    has_nde = "✅有" if d.get('nde_file') else "❌无"
-                    dispute_ctx += f"|{i}|{d['dispute_id']}|{fname}|{d['original_prediction']}|{d.get('user_description','-')}|{d['status']}|{has_evidence}|{has_nde}|\n"
+                dispute_ctx = build_dispute_block(disputes)
             else:
                 dispute_ctx = "\n\n## 争议项\n当前没有争议项记录。"
         except Exception:
@@ -1134,17 +1031,7 @@ async def chat_ask(req: dict):
                 if v:
                     dispatch_data_ctx += f"- {k}: {v}\n"
 
-        dispatch_note = f"""
-
-## 检测报告 / 委托单处理规则
-
-当用户要求"开具报告"或提到"委托单"时，按以下规则回复：
-
-1. **先要求委托单**：回答"好的，请上传填写好的委托单（.doc/.docx格式），系统将根据委托单信息生成正式的超声检测报告。委托单模板在项目 templates/ 目录下。"
-2. **委托单已上传时**：如果用户已经上传了委托单且系统已解析成功，回复"委托单已收到，正在为您生成检测报告…"并告知用户点击"生成报告"按钮即可下载
-3. **不要代替提交**：AI 本身不能直接生成报告文件，需要用户点击前端按钮触发
-{dispatch_data_ctx}"""
-        system_prompt += dispatch_note
+        system_prompt += build_dispatch_block(dispatch_data_ctx)
 
     # 调用 AI 流式返回
     async def text_generator():
@@ -1159,29 +1046,7 @@ async def chat_ask(req: dict):
                 return
 
             # 本地模型模式：直接输出模型预测结果
-            content = f"""## 本地模型分析结果
-
-### 模型信息
-- **模型名称**：{prediction['model_name']}
-- **模型类型**：{prediction['model_type']}
-
-### 预测结果
-- **Top-1 预测**：**{prediction['prediction']}**
-- **置信度**：{prediction['confidence']:.1%}
-- **Top-3**：{', '.join(prediction['top3'])}
-
-### 各类别概率详情
-
-| 类别 | 概率 |
-|------|------|
-"""
-            for cls, prob in sorted(prediction['probabilities'].items(), key=lambda x: x[1], reverse=True):
-                bar_len = int(prob * 30)
-                bar = '█' * bar_len + '░' * (30 - bar_len)
-                content += f"| **{cls}** | {prob:.1%} {bar} |\n"
-
-            content += """
-> 当前使用本地模型进行评估，如需更详细的分析（信号特征、材料参数等），请切换至 **DeepSeek 云端** 模式。"""
+            content = build_local_model_content(prediction)
             yield content
             yield "\n__DONE__"
             return

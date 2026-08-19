@@ -159,17 +159,21 @@ class AcceptanceChecker:
                     "action": cond.get("action", "不合格"),
                 })
 
-        # 判断是否超标的逻辑：按 action 字段定级
-        # - 任何 action="不合格" => 不合格
-        # - 只有 "可疑"/"建议" 类 action => 合格但有警告
+        # 判断是否超标：按 action 定级 + 是否需要 CScan 尺寸
+        needs_cscan = criteria.get("needs_cscan", False)
         if violations:
             fatal = [v for v in violations if v["action"] == "不合格"]
             warnings = [v for v in violations if v["action"] != "不合格"]
             if fatal:
+                # 信号层面已足以判定不合格（如底波消失=脱粘），无需尺寸
                 passed = False
                 reason = "不合格：" + "；".join([v["description"] for v in fatal])
                 if warnings:
                     reason += f"。另有警告：{'；'.join([v['description'] for v in warnings])}"
+            elif needs_cscan:
+                # 只触发"可疑"级，且该缺陷的合格判定依赖尺寸（AScan 给不出尺寸）→ 无法判定
+                passed = None
+                reason = "无法判定，需补充尺寸信息：" + "；".join([v["description"] for v in warnings])
             else:
                 passed = True
                 reason = "合格，但有需要注意的事项：" + "；".join([v["description"] for v in violations])
@@ -179,7 +183,6 @@ class AcceptanceChecker:
 
         # 补充检测建议
         suggestions = []
-        needs_cscan = criteria.get("needs_cscan", False)
         if needs_cscan:
             suggestions.append("单纯从超声 AScan 无法获得缺陷尺寸信息，建议补充超声 CScan")
 

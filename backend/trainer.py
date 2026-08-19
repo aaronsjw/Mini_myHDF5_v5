@@ -1509,8 +1509,17 @@ def generate_inspection_report(
     from docx import Document
     from lxml import etree
 
-    report_id = f"JC-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     basename = os.path.splitext(os.path.basename(filename))[0]
+    dd = dispatch_data or {}
+
+    # 任务编号优先用委托单头部的 Task No.，据此确定报告编号（= 文件名，避免下载时找不到）
+    task_no = dd.get('_Task_No', '')
+    if not task_no or any(c in task_no for c in '/\\|<>:"'):
+        task_no = f"JC-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    safe_id = re.sub(r'[^a-zA-Z0-9\-_]', '-', f"{task_no}-01")
+    report_id = safe_id.strip('-')
+    if not report_id:
+        report_id = f"JC-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
     # ── 1. 定位模板文件 ──
     template_path = os.path.join(os.path.dirname(__file__), "..", "templates", "超声检测报告.docx")
@@ -1546,20 +1555,8 @@ def generate_inspection_report(
         conclusion = "未检测到明显缺陷信号，判定为正常区域（OK）"
         result_detail = signal_summary
 
-    dd = dispatch_data or {}
     def _dd(k, fallback=""):
         return dd.get(k) or fallback
-
-    # 任务编号优先用委托单头部的 Task No.
-    task_no = _dd('_Task_No', '')
-    if not task_no or any(c in task_no for c in '/\\|<>:"'):
-        task_no = f"JC-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-    # 清理 report_id：只保留字母数字和 -_
-    import re as _re
-    safe_id = _re.sub(r'[^a-zA-Z0-9\-_]', '-', f"{task_no}-01")
-    report_id = safe_id.strip('-')
-    if not report_id:
-        report_id = f"JC-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
     # 委托单位名称（从 Customer_Addr 取）
     cust_name = _dd('Customer_Addr', basename.split('_')[0] if '_' in basename else basename)
