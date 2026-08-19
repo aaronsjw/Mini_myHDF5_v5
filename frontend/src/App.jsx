@@ -592,9 +592,9 @@ export default function App() {
                         padding: '10px 20px 16px',
                         borderTop: '1px solid #222'
                     }}>
-                        Mini_myHDF5 V5
+                        AI-NDE for Composites
                         <br />
-                        Made by Aaron at ZHFC
+                        Made by Aaron at FCZX
                     </div>
                 </div>
             </Sider>
@@ -603,7 +603,7 @@ export default function App() {
             <Content style={{ padding: 20, overflow: 'hidden', background: '#f5f5f5', position: 'relative' }}>
                 {/* 模型训练 TrainingPanel ****************/}
                 <div style={{ height: '100%', overflow: 'auto', display: activeModule === 'model' ? 'block' : 'none' }}>
-                    <TrainingPanel />
+                    <TrainingPanel active={activeModule === 'model'} />
                 </div>
                 {/* 数据库预览 DatabaseOverview ****************/}
                 <div style={{ height: '100%', overflow: 'auto', display: activeModule === 'dataset' ? 'block' : 'none' }}>
@@ -632,7 +632,7 @@ export default function App() {
                 </div>
                 {/* 模型测试 TestingPanel ****************/}
                 <div style={{ height: '100%', overflow: 'auto', display: activeModule === 'test' ? 'block' : 'none' }}>
-                    <TestingPanel />
+                    <TestingPanel active={activeModule === 'test'} />
                 </div>
                 {/* 智能评估 EvaluationPanel ****************/}
                 <div style={{ height: '100%', display: activeModule === 'analysis' ? 'block' : 'none' }}>

@@ -1,0 +1,135 @@
+{
+  "model_type": "random_forest",
+  "accuracy": 0.8713910761154856,
+  "test_size": 0.2,
+  "n_estimators": 100,
+  "max_depth": null,
+  "n_samples": 1902,
+  "n_features": 405,
+  "class_names": [
+    "Cp",
+    "Db",
+    "Dl",
+    "OK",
+    "Po"
+  ],
+  "classification_report": {
+    "Cp": {
+      "precision": 0.961038961038961,
+      "recall": 0.9135802469135802,
+      "f1-score": 0.9367088607594937,
+      "support": 81.0
+    },
+    "Db": {
+      "precision": 0.9850746268656716,
+      "recall": 0.88,
+      "f1-score": 0.9295774647887324,
+      "support": 75.0
+    },
+    "Dl": {
+      "precision": 0.8918918918918919,
+      "recall": 0.9166666666666666,
+      "f1-score": 0.9041095890410958,
+      "support": 72.0
+    },
+    "OK": {
+      "precision": 0.743801652892562,
+      "recall": 0.8910891089108911,
+      "f1-score": 0.8108108108108109,
+      "support": 101.0
+    },
+    "Po": {
+      "precision": 0.8571428571428571,
+      "recall": 0.6923076923076923,
+      "f1-score": 0.7659574468085106,
+      "support": 52.0
+    },
+    "accuracy": 0.8713910761154856,
+    "macro avg": {
+      "precision": 0.8877899979663886,
+      "recall": 0.8587287429597661,
+      "f1-score": 0.8694328344417286,
+      "support": 381.0
+    },
+    "weighted avg": {
+      "precision": 0.88093534012828,
+      "recall": 0.8713910761154856,
+      "f1-score": 0.8724653467652684,
+      "support": 381.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      74,
+      0,
+      0,
+      3,
+      4
+    ],
+    [
+      0,
+      66,
+      1,
+      8,
+      0
+    ],
+    [
+      0,
+      0,
+      66,
+      6,
+      0
+    ],
+    [
+      1,
+      1,
+      7,
+      90,
+      2
+    ],
+    [
+      2,
+      0,
+      0,
+      14,
+      36
+    ]
+  ],
+  "confusion_matrix_labels": [
+    "Cp",
+    "Db",
+    "Dl",
+    "OK",
+    "Po"
+  ],
+  "use_metadata": true,
+  "meta_categories": {
+    "fiber": [
+      "CF",
+      "GF",
+      "GFAF"
+    ],
+    "fiberGrade": [
+      "CF8611",
+      "FQW199",
+      "QW120",
+      "QW280",
+      "ZT9H"
+    ],
+    "matrixGrade": [
+      "1316",
+      "5224A",
+      "AC319",
+      "AC531"
+    ],
+    "structure": [
+      "BondPP",
+      "Plate",
+      "Taper"
+    ]
+  },
+  "n_features_meta": 15,
+  "model_name": "rf_Cp_Db_Dl_OK_Po_0.871_20260818_173134",
+  "model_file": "rf_Cp_Db_Dl_OK_Po_0.871_20260818_173134.pkl",
+  "saved_at": "20260818_173134"
+}

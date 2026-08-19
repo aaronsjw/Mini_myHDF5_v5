@@ -781,7 +781,7 @@ def test_start(req: dict):
     job_id = start_test(req)
     return {"job_id": job_id, "status": "pending"}
 
-# 测试状态
+# 测试进度
 @app.get("/test/status/{job_id}")
 def test_status(job_id: str):
     return get_test_status(job_id)
@@ -814,7 +814,7 @@ def test_file_preview(path: str):
 # ══════════════════════════════════════════════════
 # region 流式对话结果评估
 
-# 
+# 信号波形查询
 @app.get("/chat/signal_waveform")
 def chat_signal_waveform():
     """返回当前文件的 A-Scan 全量波形数据和逐帧异常信息"""
@@ -831,7 +831,7 @@ def chat_signal_waveform():
     except Exception as e:
         return {"error": f"分析失败: {str(e)}"}
 
-#
+# AI对话评估
 @app.post("/chat/ask")
 async def chat_ask(req: dict):
     """智能评估对话接口（SSE 流式）"""
@@ -856,7 +856,7 @@ async def chat_ask(req: dict):
     has_file = current_file is not None and os.path.exists(current_file)
 
     if has_file:
-        # ── 有文件：读取信号 + 模型预测 ──
+        # 有文件：读取信号 + 模型预测
         try:
             signal = analyze_signal(current_file)
             meta = load_nde_meta(current_file)
@@ -882,7 +882,7 @@ async def chat_ask(req: dict):
                 except Exception as e:
                     prediction = {"error": str(e)}
 
-        # ── 提取元数据文本 ──
+        # 提取元数据文本
         meta_lines = []
         if meta:
             gl = meta.get("GlobalLabel", {})
@@ -900,7 +900,7 @@ async def chat_ask(req: dict):
             if di.get("probeFreq"): meta_lines.append(f"- 探头频率：{di['probeFreq']} MHz")
             if di.get("samplingFreq"): meta_lines.append(f"- 采样频率：{di['samplingFreq']} MHz")
 
-        # ── 信号特征文本 ──
+        # 信号特征文本
         signal_lines = []
         if signal:
             signal_lines.append(f"- 幅值范围：[{signal['amp_range'][0]}, {signal['amp_range'][1]}]")
@@ -913,7 +913,7 @@ async def chat_ask(req: dict):
             signal_lines.append(f"- 衰减系数：{signal['attenuation']}")
             signal_lines.append(f"- 异常区域：{signal['abnormal_zone_desc']}")
 
-        # ── 预测结果文本 ──
+        # 预测结果文本
         pred_lines = []
         if prediction and "error" not in prediction:
             pred_lines.append(f"- Top-1 预测：{prediction['prediction']}")
@@ -930,7 +930,7 @@ async def chat_ask(req: dict):
             pred_lines.append(f"- 各类别概率：{prob_details}")
             pred_lines.append(f"- 使用模型：{prediction['model_name']}")
 
-        # ── 构造 system prompt ──
+        # 构造 system prompt
         system_prompt = f"""你是复合材料智能检测与评估助手小史。你的任务是根据提供的 .nde 文件信号特征和模型预测结果，综合分析是否存在缺陷以及缺陷类型。
 
 ## 材料与检测参数
@@ -990,7 +990,7 @@ async def chat_ask(req: dict):
 """
 
     else:
-        # ── 无文件：通用助手指令 ──
+        # 无文件：通用助手指令
         system_prompt = """你是复合材料智能检测与评估助手小史。你可以：
 1. 介绍复合材料超声检测的相关知识
 2. 解释常见的缺陷类型（分层、脱粘、气孔、夹杂等）
@@ -1005,7 +1005,7 @@ async def chat_ask(req: dict):
 - 检测方法：WRUT=水耦合反射/水浸, WPUT=水穿透, DBUT=延迟块耦合, PAUT=相控阵, AUT=空耦, LUT=激光
 
 请用中文回复，适当使用 Markdown 格式。如果用户询问具体文件分析，请提醒用户上传 .nde 文件。"""
-    # ── 如果询问数据库信息，追加数据集描述 ──
+    # 如果询问数据库信息，追加数据集描述
     if dataset_info:
         defect_detail = "、".join([f"{k}({v}个)" for k, v in dataset_info["by_defect"].items()])
         dataset_block = f"""
@@ -1022,7 +1022,7 @@ async def chat_ask(req: dict):
 请根据以上真实数据回答用户的问题。"""
         system_prompt += dataset_block
 
-    # ── 验收标准相关查询（对话式） ──
+    # 验收标准相关查询（对话式）
     acceptance_keywords = ['验收', '验收标准', '验收文件', '超标', '合格判定', '验收判定', '标准文件']
     asks_acceptance = any(k in question for k in acceptance_keywords)
     acceptance_ctx = ""
@@ -1087,7 +1087,7 @@ async def chat_ask(req: dict):
     if acceptance_ctx:
         system_prompt += acceptance_ctx
 
-    # ── 争议项查询（对话式） ──
+    # 争议项查询（对话式）
     dispute_keywords = ['争议', '争议项', '待仲裁', 'DSP']
     asks_dispute = any(k in question for k in dispute_keywords)
     dispute_ctx = ""
@@ -1123,7 +1123,7 @@ async def chat_ask(req: dict):
     if dispute_ctx:
         system_prompt += dispute_ctx
 
-    # ── 委托单 / 报告相关对话规则 ──
+    # 委托单 / 报告相关对话规则
     dispatch_keywords = ['报告', '委托单', '开具', '开报告', '检测报告']
     asks_dispatch = any(k in question for k in dispatch_keywords)
     if asks_dispatch and has_file:
@@ -1140,13 +1140,13 @@ async def chat_ask(req: dict):
 
 当用户要求"开具报告"或提到"委托单"时，按以下规则回复：
 
-1. **先要求委托单**：回答"好的，请上传填写好的委托单（.doc格式），系统将根据委托单信息生成正式的超声检测报告。委托单模板在项目 templates/ 目录下。"
+1. **先要求委托单**：回答"好的，请上传填写好的委托单（.doc/.docx格式），系统将根据委托单信息生成正式的超声检测报告。委托单模板在项目 templates/ 目录下。"
 2. **委托单已上传时**：如果用户已经上传了委托单且系统已解析成功，回复"委托单已收到，正在为您生成检测报告…"并告知用户点击"生成报告"按钮即可下载
 3. **不要代替提交**：AI 本身不能直接生成报告文件，需要用户点击前端按钮触发
 {dispatch_data_ctx}"""
         system_prompt += dispatch_note
 
-    # ── 调用 AI 流式返回 ──
+    # 调用 AI 流式返回
     async def text_generator():
         if ai_mode == 'local':
             if not has_file:
@@ -1377,11 +1377,13 @@ async def dispute_submit(
     original_file: str = Form(""),
 ):
     """登记争议项，可选上传证据 ZIP"""
+    # 生成争议id
     import uuid
     dispute_id = f"DSP-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
     dispute_dir = os.path.join(DISPUTES_DIR, dispute_id)
     os.makedirs(dispute_dir, exist_ok=True)
 
+    # 目录
     evidence_path = None
     if file and file.filename:
         ext = os.path.splitext(file.filename)[1].lower()
@@ -1408,7 +1410,6 @@ async def dispute_submit(
         "evidence_file": evidence_path,
         "nde_file": nde_copy_path,
         "status": "待仲裁",
-        "status": "待仲裁",
     }
     with open(os.path.join(dispute_dir, "metadata.json"), "w", encoding="utf-8") as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
@@ -1432,13 +1433,14 @@ def dispute_list():
 # 解析委托单
 @app.post("/dispatch/upload")
 async def dispatch_upload(file: UploadFile = File(...)):
-    """上传已填写的委托单 .doc 文件，解析字段"""
+    """上传已填写的委托单（.doc 或 .docx）文件，解析字段"""
     global current_dispatch_data
-    if not file.filename.endswith('.doc'):
-        return {"success": False, "error": "仅支持 .doc 格式的委托单文件"}
+    suffix = os.path.splitext(file.filename)[1].lower()
+    if suffix not in ('.doc', '.docx'):
+        return {"success": False, "error": "仅支持 .doc 或 .docx 格式的委托单文件"}
 
     import tempfile
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.doc')
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     tmp.write(await file.read())
     tmp.close()
 

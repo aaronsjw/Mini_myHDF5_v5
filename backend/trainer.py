@@ -47,22 +47,58 @@ FILENAME_PATTERN = re.compile(
 # ══════════════════════════════════════════════════
 # region 机器学习模型
 
-# 特征提取64+8
+# 特征提取：64行信号统计 + 动态元数据 one-hot
 MAX_ASCAN_LINES = 64                        # 统一行数，不足补0，超出截断
-META_CATEGORIES = {                         # 材料结构元数据类别编码，共8维，RandomForest 特征增强
-    "fiber": ["CF", "GF"],
-    "fiberGrade": ["ZT9H", "QW280"],
-    "matrixGrade": ["1316", "AC319"],
-    "structure": ["BondPP", "Plate"],
-}
-META_FEATURE_DIM = sum(len(v) for v in META_CATEGORIES.values())  # 8维one-hot
+_meta_categories_cache = None
+
+# 动态扫描数据集、自动收集元数据类别
+def _scan_meta_categories(base_dir=None):
+    """扫描数据集，动态收集元数据字段取值，构建 one-hot 类别字典（带缓存）。
+    字段：fiber / fiberGrade / matrixGrade（来自 MaterialInfo）、structure（来自 GlobalLabel）。
+    返回 {field: [取值...]}，各字段取值已排序，保证编码顺序稳定。
+    """
+    global _meta_categories_cache
+    if base_dir is None:
+        base_dir = BASE_DIR
+    if _meta_categories_cache is not None:
+        return _meta_categories_cache
+
+    categories = {"fiber": set(), "fiberGrade": set(), "matrixGrade": set(), "structure": set()}
+    if os.path.isdir(base_dir):
+        for dd in sorted(os.listdir(base_dir)):
+            dir_path = os.path.join(base_dir, dd)
+            if not os.path.isdir(dir_path):
+                continue
+            for fname in os.listdir(dir_path):
+                if not fname.lower().endswith(".nde"):
+                    continue
+                try:
+                    with h5py.File(os.path.join(dir_path, fname), "r") as f:
+                        try:
+                            label_obj = json.loads(f["Private/GlobalLabel"][()].decode("utf-8"))
+                            if label_obj.get("structure"):
+                                categories["structure"].add(label_obj["structure"])
+                        except Exception:
+                            pass
+                        try:
+                            material_obj = json.loads(f["Private/MaterialInfo"][()].decode("utf-8"))
+                            for k in ("fiber", "fiberGrade", "matrixGrade"):
+                                if material_obj.get(k):
+                                    categories[k].add(material_obj[k])
+                        except Exception:
+                            pass
+                except Exception:
+                    continue
+    # 每个字段末尾追加 "unknown" 占位，让训练集外的值归到未知位，而非全 0
+    _meta_categories_cache = {k: sorted(v) + ["unknown"] for k, v in categories.items()}
+    return _meta_categories_cache
 
 
-# 元数据特征提取--》8维元数据one-hot
-def encode_metadata(label_obj: dict, material_obj: dict) -> np.ndarray:
+# 元数据特征提取 → one-hot 编码
+def encode_metadata(label_obj: dict, material_obj: dict, meta_categories: dict) -> np.ndarray:
     """
     从 GlobalLabel 和 MaterialInfo 提取元数据，编码为 one-hot 向量。
-    返回 shape [8,] 的向量。
+    返回 one-hot 向量，维度 = 各类别维度之和。
     """
     import warnings
     values = {}
@@ -79,14 +115,12 @@ def encode_metadata(label_obj: dict, material_obj: dict) -> np.ndarray:
         values["matrixGrade"] = label_obj.get("matrixGrade", None)
 
     vec = []
-    for field, cats in META_CATEGORIES.items():
+    for field, cats in meta_categories.items():
         val = values.get(field)
-        # one-hot 编码
-        onehot = [1.0 if val == c else 0.0 for c in cats]
-        if not any(onehot):
-            # 未知值全部归零
-            onehot = [0.0] * len(cats)
-        vec.extend(onehot)
+        # 缺失或训练集外的值 → 归到 unknown 位（列表末尾）
+        if val is None or val not in cats:
+            val = "unknown"
+        vec.extend([1.0 if val == c else 0.0 for c in cats])
     return np.array(vec, dtype=np.float32)
 
 
@@ -154,18 +188,21 @@ def get_dataset_path(f: h5py.File) -> str:
     return None
 
 
-# 数据加载，8维元数据one-hot+390维信号统计特征
+# 数据加载，动态维度元数据one-hot+390维信号统计特征
 def load_dataset(base_dir=None, max_files=None, progress_callback=None,
                  use_metadata=True):
     """
     扫描 dataset/ 子目录，加载 .nde 文件。
     返回 X, y, class_names, file_count
-    当 use_metadata=True 时，X 包含信号特征 + 元数据特征（共 398 维）
+    当 use_metadata=True 时，X 包含信号特征 + 元数据特征
     """
     if base_dir is None:
         base_dir = BASE_DIR
     X_list, y_list, file_paths = [], [], []
     class_names = set()
+
+    # 动态扫描元数据类别（供 one-hot 编码使用）
+    meta_categories = _scan_meta_categories(base_dir) if use_metadata else None
 
     # 找出有数据的缺陷目录
     defect_dirs = sorted([
@@ -220,7 +257,7 @@ def load_dataset(base_dir=None, max_files=None, progress_callback=None,
                     # 信号特征 + 元数据特征
                     signal_feats = extract_features(data)
                     if use_metadata:
-                        meta_feats = encode_metadata(label_obj, material_obj)
+                        meta_feats = encode_metadata(label_obj, material_obj, meta_categories)
                         feats = np.concatenate([signal_feats, meta_feats])
                     else:
                         feats = signal_feats
@@ -241,7 +278,7 @@ def load_dataset(base_dir=None, max_files=None, progress_callback=None,
     X = np.array(X_list)
     y = np.array(y_list)
     class_list = sorted(class_names)
-    return X, y, class_list, loaded, file_paths
+    return X, y, class_list, loaded, file_paths, meta_categories
 
 
 # 数据预览（不训练，只统计）
@@ -275,7 +312,7 @@ def preview_dataset(base_dir=None):
                         data = np.squeeze(data)
                         signal_feats = extract_features(data)
                         result["n_features"] = len(signal_feats)
-                        result["n_features_total"] = len(signal_feats) + META_FEATURE_DIM
+                        result["n_features_total"] = len(signal_feats) + sum(len(v) for v in _scan_meta_categories(base_dir).values())
             except Exception:
                 pass
 
@@ -851,7 +888,7 @@ def _run_train(job_id, config):
         else:
             # 传统机器学习分支（RandomForest）
             use_meta = config.get("use_metadata", True)
-            X, y, class_names, n_loaded, _ = load_dataset(      # RF数据
+            X, y, class_names, n_loaded, _, meta_categories = load_dataset(      # RF数据
                 progress_callback=progress_callback,
                 use_metadata=use_meta,
             )
@@ -874,7 +911,8 @@ def _run_train(job_id, config):
             )
 
             metrics["use_metadata"] = use_meta
-            metrics["n_features_meta"] = META_FEATURE_DIM
+            metrics["meta_categories"] = meta_categories
+            metrics["n_features_meta"] = sum(len(v) for v in meta_categories.values()) if meta_categories else 0
             model_name, model_path = save_model(model, metrics) # 保存模型
             metrics["model_name"] = model_name
             task["status"] = "done"
@@ -923,12 +961,13 @@ def get_result(job_id: str) -> dict:
 
 _test_tasks = {}  # {job_id: {status, progress, result, error}}
 
-
+# 加载已训练模型
 def load_model_for_testing(model_name: str):
     """
     从 models/ 加载模型和 meta 信息。
     返回 (model, meta)
     """
+    # 先读json指标
     meta_path = os.path.join(MODEL_DIR, f"{model_name}.json")
     with open(meta_path, "r", encoding="utf-8") as f:
         meta = json.load(f)
@@ -936,22 +975,23 @@ def load_model_for_testing(model_name: str):
     model_type = meta.get("model_type", "random_forest")
 
     if model_type == "deep_cnn_lstm_transformer":
+        # DL：重建模型，加载权重
         if not DEEP_LEARNING_AVAILABLE:
             raise RuntimeError("PyTorch 未安装，无法加载深度学习模型")
         model_path = os.path.join(MODEL_DIR, f"{model_name}.pt")
-        # 重建模型
         class_list = meta["class_names"]
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model = DeepNDEClassifier(n_classes=len(class_list)).to(device)
         model.load_state_dict(torch.load(model_path, map_location=device))
         model.eval()
     else:
+        # RF：直接反序列化
         model_path = os.path.join(MODEL_DIR, f"{model_name}.pkl")
         model = joblib.load(model_path)
 
     return model, meta
 
-
+# 测试
 def run_test(model, meta, X, y_true=None, file_paths=None):
     """
     对测试数据运行预测。
@@ -1055,7 +1095,7 @@ def run_test(model, meta, X, y_true=None, file_paths=None):
 
     return result
 
-
+# 测试线程
 def _run_test(job_id, config):
     """后台线程执行测试"""
     task = _test_tasks[job_id]
@@ -1076,14 +1116,14 @@ def _run_test(job_id, config):
 
         # 加载测试数据
         model_type = meta.get("model_type", "random_forest")
-        use_meta = config.get("use_metadata", True)
+        use_meta = meta.get("use_metadata", True)   # 用模型训练时的设置，保证特征维度一致
 
         if model_type == "deep_cnn_lstm_transformer":
             X, y, class_names, n_loaded, file_paths = load_dataset_raw(
                 progress_callback=lambda p: None
             )
         else:
-            X, y, class_names, n_loaded, file_paths = load_dataset(
+            X, y, class_names, n_loaded, file_paths, _ = load_dataset(
                 progress_callback=lambda p: None,
                 use_metadata=use_meta,
             )
@@ -1121,7 +1161,7 @@ def _run_test(job_id, config):
         import traceback
         task["error"] += "\n" + traceback.format_exc()
 
-
+# 开始测试
 def start_test(config: dict) -> str:
     """启动异步测试任务，返回 job_id"""
     job_id = uuid.uuid4().hex[:12]
@@ -1135,18 +1175,18 @@ def start_test(config: dict) -> str:
     t.start()
     return job_id
 
-
+# 查测试进度
 def get_test_status(job_id: str) -> dict:
     return _test_tasks.get(job_id, {"status": "not_found"})
 
-
+# 查测试结果
 def get_test_result(job_id: str) -> dict:
     task = _test_tasks.get(job_id)
     if task and task["status"] == "done":
         return task["result"]
     return None
 
-
+# 路径安全保护
 def load_file_for_preview(rel_path: str) -> dict:
     """加载 .nde 文件返回 B-scan 和 A-scan 预览数据"""
     full_path = os.path.normpath(os.path.join(BASE_DIR, rel_path))
@@ -1181,7 +1221,14 @@ def load_file_for_preview(rel_path: str) -> dict:
             "filename": os.path.basename(rel_path),
         }
 
+# endregion
 
+# ══════════════════════════════════════════════════
+# 5.AI chat
+# ══════════════════════════════════════════════════
+# region 模型推理
+
+# 单文件推理 for AI
 def predict_single_file(file_path: str, model_name: str) -> dict:
     """
     对单个 .nde 文件进行预测。
@@ -1256,8 +1303,12 @@ def predict_single_file(file_path: str, model_name: str) -> dict:
     else:
         # RandomForest
         signal_feats = extract_features(data)
-        meta_feats = encode_metadata(label_obj, material_obj)
-        feats = np.concatenate([signal_feats, meta_feats]).reshape(1, -1)
+        if meta.get("use_metadata", True):
+            meta_categories = meta.get("meta_categories") or _scan_meta_categories()
+            meta_feats = encode_metadata(label_obj, material_obj, meta_categories)
+            feats = np.concatenate([signal_feats, meta_feats]).reshape(1, -1)
+        else:
+            feats = signal_feats.reshape(1, -1)
 
         probs_raw = model.predict_proba(feats)[0]
         # 对齐到 class_names 顺序
@@ -1289,7 +1340,6 @@ def predict_single_file(file_path: str, model_name: str) -> dict:
 
 # endregion
 
-
 # ══════════════════════════════════════════════════
 # 5.报告与委托单
 # ══════════════════════════════════════════════════
@@ -1301,11 +1351,25 @@ os.makedirs(REPORT_DIR, exist_ok=True)
 
 def parse_dispatch_doc(file_path: str) -> dict:
     """
-    解析委托单 .doc 文件，提取关键字段。
+    解析委托单文件（.doc 或 .docx），提取关键字段。
     委托单为表格结构，每两行一组（中文标签行 + 英文标签行）。
     返回字段名→值的字典。
     """
-    import subprocess, os, shutil, tempfile
+    ext = os.path.splitext(file_path)[1].lower()
+
+    if ext == ".docx":
+        text = _docx_to_dispatch_text(file_path)
+    else:
+        text = _doc_to_dispatch_text(file_path)
+        if text is None:
+            return {"_error": "antiword 未安装"}
+
+    return _parse_dispatch_text(text)
+
+
+def _doc_to_dispatch_text(file_path: str):
+    """用 antiword 将 .doc 委托单转为纯文本；找不到 antiword 时返回 None。"""
+    import subprocess, shutil, tempfile
 
     antiword_path = shutil.which("antiword") or shutil.which("antiword.exe")
     if not antiword_path:
@@ -1317,7 +1381,7 @@ def parse_dispatch_doc(file_path: str) -> dict:
                 antiword_path = p
                 break
     if not antiword_path:
-        return {"_error": "antiword 未安装"}
+        return None
 
     tmp_txt = tempfile.NamedTemporaryFile(delete=False, suffix='.txt')
     tmp_txt.close()
@@ -1326,7 +1390,31 @@ def parse_dispatch_doc(file_path: str) -> dict:
     with open(tmp_txt.name, 'r', encoding='utf-8') as f:
         text = f.read()
     os.unlink(tmp_txt.name)
+    return text
 
+
+def _docx_to_dispatch_text(file_path: str) -> str:
+    """用 python-docx 将 .docx 委托单转为与 antiword 兼容的纯文本（表格行用 | 分隔）。"""
+    from docx import Document
+    from docx.oxml.ns import qn
+
+    doc = Document(file_path)
+    lines = []
+    for child in doc.element.body.iterchildren():
+        if child.tag == qn('w:p'):
+            text = ''.join(t.text or '' for t in child.iter(qn('w:t')))
+            if text.strip():
+                lines.append(text.strip())
+        elif child.tag == qn('w:tbl'):
+            for tr in child.findall(qn('w:tr')):
+                cells = [''.join(t.text or '' for t in tc.iter(qn('w:t'))).strip()
+                         for tc in tr.findall(qn('w:tc'))]
+                lines.append('| ' + ' | '.join(cells) + ' |')
+    return '\n'.join(lines)
+
+
+def _parse_dispatch_text(text: str) -> dict:
+    """从委托单纯文本中提取字段（中文字段标签匹配 + 跨行拼接）。"""
     # 中文字段标签 → 字段名映射
     LABEL_MAP = {
         "委托单位": "Customer_Addr",
