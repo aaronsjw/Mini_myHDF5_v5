@@ -19,6 +19,7 @@ const LABEL_OPTIONS = [
     { value: 4, label: '气孔', color: '#722ed1' },
     { value: 5, label: '夹杂', color: '#1890ff' },
     { value: 9, label: '耦合不良', color: '#d9d9d9' },
+    { value: 15, label: '胶膜孔隙', color: '#13c2c2' },
 ]
 
 export default function AScanViewer({
@@ -142,6 +143,9 @@ export default function AScanViewer({
                 if (label && effectiveLabels) {
                     updateLabel(frameIndex, num)
                 }
+            } else if (e.key === 'a' || e.key === 'A') {
+                // 胶膜孔隙（value 15，超过单数字键范围，用 A 键）
+                if (effectiveLabels) updateLabel(frameIndex, 15)
             }
         }
         window.addEventListener('keydown', handleKeyDown)
@@ -278,7 +282,7 @@ export default function AScanViewer({
                                 <span style={{ color: '#999' }}>| 操作：选好区→按0→点「自动标注」→补剩余帧</span>
                             </>
                         ) : (
-                            <span style={{ color: '#999' }}>操作：选一帧好区，按数字键 0 标注，再点击「自动标注」</span>
+                            <span style={{ color: '#999' }}>操作：选一帧好区，按数字键 0 标注（胶膜孔隙按 A 键），再点击「自动标注」</span>
                         )}
                     </div>
 

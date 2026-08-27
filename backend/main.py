@@ -1,4 +1,8 @@
 
+"""
+后端核心源代码
+API路由与业务逻辑
+"""
 from fastapi import FastAPI, UploadFile, File, Form             # 文件上传，表单
 from fastapi.responses import FileResponse, StreamingResponse   # 返回文件，流式响应
 from fastapi.middleware.cors import CORSMiddleware              # 跨域资源共享
@@ -318,7 +322,7 @@ def download_nde():
 
     filename = current_filename
     if new_label:
-        filename = re.sub(r'_(OK|Dl|Db|Po|Vo|In|Fb|Rs|Uc)_', f'_{new_label}_', filename)
+        filename = re.sub(r'_(OK|Dl|Db|Po|Ap|Vo|In|Fb|Rs|Uc)_', f'_{new_label}_', filename)
 
     return FileResponse(
         path=current_file,
@@ -352,6 +356,7 @@ FRAME_LABEL_OPTIONS = [
     {"value": 12, "label": "波形过渡"},
     {"value": 13, "label": "不可分类"},
     {"value": 14, "label": "信号质量变化"},
+    {"value": 15, "label": "胶膜孔隙"},
 ]
 
 # 从 .nde 文件中探测波形数据的总帧数
@@ -508,7 +513,7 @@ async def batch_save_defect_type(
             dirname = os.path.dirname(nde)
             old_name = os.path.basename(nde)
             parts = old_name.split("_")
-            labels = ["OK","Dl","Db","Po","Vo","In","Fb","Rs","Uc"]
+            labels = ["OK","Dl","Db","Po","Ap","Vo","In","Fb","Rs","Uc"]
             for i, p in enumerate(parts):
                 if p in labels:
                     parts[i] = defectType

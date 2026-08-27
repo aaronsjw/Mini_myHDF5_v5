@@ -10,7 +10,7 @@ const DEFECT_COLORS = {
 }
 
 const DEFECT_FULL_NAMES = {
-    OK: '好区', Dl: '分层', Db: '脱粘', Po: '孔隙',
+    OK: '好区', Dl: '分层', Db: '脱粘', Po: '孔隙', Ap: '胶膜孔隙',
     Vo: '气孔', In: '夹杂', Fb: '纤维相关', Rs: '树脂相关',
     Cp: '耦合不良', Uc: '不可识别'
 }

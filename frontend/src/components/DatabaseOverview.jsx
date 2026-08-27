@@ -8,12 +8,19 @@ const DEFECT_LABELS = {
     Dl: { color: 'red', text: '分层' },
     Db: { color: 'orange', text: '脱粘' },
     Po: { color: 'volcano', text: '孔隙' },
+    Ap: { color: 'gold', text: '胶膜孔隙' },
     Vo: { color: 'purple', text: '气孔' },
     In: { color: 'blue', text: '夹杂' },
     Fb: { color: 'cyan', text: '纤维相关' },
     Rs: { color: 'geekblue', text: '树脂相关' },
     Cp: { color: 'magenta', text: '耦合不良' },
     Uc: { color: 'default', text: '不可识别' }
+}
+
+// 脱粘(Db)按结构细分：标签保持 Db，显示时区分（BondPP=板板脱粘, BondSC=板芯脱粘）
+const DB_STRUCTURE_TEXT = {
+    BondPP: '板板脱粘',
+    BondSC: '板芯脱粘',
 }
 
 // 命名规则中字段的中文名
@@ -41,20 +48,33 @@ export default function DatabaseOverview() {
     if (loading) return <Spin size="large" style={{ display: 'block', marginTop: 100 }} />
     if (!data || data.error) return <div style={{ padding: 40, color: '#999' }}>未找到 dataset 目录</div>
 
-    // 按缺陷类型分组的列
+    // 按缺陷类型分组的列（Db 按结构拆分为 板板脱粘 / 板芯脱粘）
     const defectColumns = [
-        { title: '缺陷类型', dataIndex: 'defect', key: 'defect', render: d => {
+        { title: '缺陷类型', dataIndex: 'defect', key: 'defect', render: (d, record) => {
             const info = DEFECT_LABELS[d] || { color: 'default', text: d }
-            return <Tag color={info.color}>{d} — {info.text}</Tag>
+            return <Tag color={info.color}>{record.sub ? `Db · ${record.sub}` : `${d} — ${info.text}`}</Tag>
         }},
         { title: '文件数量', dataIndex: 'count', key: 'count' }
     ]
 
-    const defectData = Object.entries(data.by_defect).map(([key, val]) => ({
-        key,
-        defect: key,
-        count: val.count
-    }))
+    // 分组数据：Db 按结构细分（BondPP=板板脱粘, BondSC=板芯脱粘），其余保持原样
+    const dbSubCount = {}
+    data.files.forEach(f => {
+        if (f.defect === 'Db') {
+            const sub = DB_STRUCTURE_TEXT[f.structure] || '脱粘'
+            dbSubCount[sub] = (dbSubCount[sub] || 0) + 1
+        }
+    })
+    const defectData = []
+    Object.entries(data.by_defect).forEach(([defect, v]) => {
+        if (defect === 'Db' && Object.keys(dbSubCount).length) {
+            Object.entries(dbSubCount).forEach(([sub, count]) => {
+                defectData.push({ key: `Db-${sub}`, defect: 'Db', sub, count })
+            })
+        } else {
+            defectData.push({ key: defect, defect, sub: null, count: v.count })
+        }
+    })
 
     // 文件详情列
     const fileColumns = [
@@ -67,10 +87,13 @@ export default function DatabaseOverview() {
             title: '缺陷类型',
             dataIndex: 'defect',
             key: 'defect',
-            width: 100,
-            render: d => {
+            width: 130,
+            render: (d, record) => {
                 const info = DEFECT_LABELS[d] || { color: 'default', text: d }
-                return <Tag color={info.color}>{d}</Tag>
+                const text = d === 'Db' && DB_STRUCTURE_TEXT[record.structure]
+                    ? `Db · ${DB_STRUCTURE_TEXT[record.structure]}`
+                    : d
+                return <Tag color={info.color}>{text}</Tag>
             }
         },
         { title: '型号', dataIndex: 'model', key: 'model', width: 80 },
