@@ -96,7 +96,7 @@ uvicorn main:app --reload
 
 ```bash
 cd frontend
-npm install
+npm install --legacy-peer-deps   # react-json-view 要求 react≤17，与 react18 冲突，须用 legacy-peer-deps
 npm run dev
 ```
 
