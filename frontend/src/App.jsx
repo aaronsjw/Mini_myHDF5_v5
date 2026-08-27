@@ -10,6 +10,7 @@ import DatabaseOverview from './components/DatabaseOverview'
 import TrainingPanel from './components/TrainingPanel'
 import TestingPanel from './components/TestingPanel'
 import EvaluationPanel from './components/EvaluationPanel'
+import Structure3DViewer from './components/Structure3DViewer'
 
 import {
     Layout,
@@ -38,6 +39,13 @@ export default function App() {
     const [frameIndex, setFrameIndex] = useState(0)
     const [currentFile, setCurrentFile] = useState('')
     const [colorMap, setColorMap] = useState('Greys')
+    const [activeViewTab, setActiveViewTab] = useState('inspect')   // Inspect/Display 外层Tabs激活页
+
+    // 节点切换或类型变化时自动定位激活页：可显示波形/张量的节点→Display，否则→Inspect
+    useEffect(() => {
+        const disp = info && ['waveform', 'nde_tensor'].includes(info.type)
+        setActiveViewTab(disp ? 'display' : 'inspect')
+    }, [currentPath, info])
 
     const [playing, setPlaying] = useState(false)           // 是否自动播放
     const [playSpeed, setPlaySpeed] = useState(80)
@@ -642,7 +650,8 @@ export default function App() {
                 <div style={{ height: '100%', display: activeModule === 'labeling' ? 'block' : 'none' }}>
                     {info && (
                         <Tabs
-                            defaultActiveKey="display"
+                            activeKey={activeViewTab}
+                            onChange={setActiveViewTab}
                             tabBarStyle={{ color: '#fff', background: '#fff', padding: '8px 12px', borderRadius: '8px' }}
 
                             items={[
@@ -660,12 +669,12 @@ export default function App() {
                                         />
                                     )
                                 },
-                                // 数据标注 - 第二个标签页Display
-                                ...(['waveform', 'nde_tensor'].includes(info.type)
-                                    ? [{
-                                        key: 'display',
-                                        label: 'Display',
-                                        children: (
+                                // 数据标注 - 第二个标签页Display（类型不支持时置灰不可用）
+                                {
+                                    key: 'display',
+                                    label: 'Display',
+                                    disabled: !['waveform', 'nde_tensor'].includes(info.type),
+                                    children: (
                                             <Tabs
                                                 defaultActiveKey="ascan"
                                                 items={[
@@ -716,12 +725,17 @@ export default function App() {
                                                                 setReverseY={setReverseY}
                                                             />
                                                         )
+                                                    },
+                                                    // Structure3DViewer 绘制结构几何示意
+                                                    {
+                                                        key: '3d',
+                                                        label: '3D',
+                                                        children: <Structure3DViewer filename={currentFile} />
                                                     }
                                                 ]}
                                             />
                                         )
-                                    }]
-                                    : [])
+                                }
                             ]}
                         />
                     )}
