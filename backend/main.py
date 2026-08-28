@@ -616,7 +616,7 @@ def label_options():
 def get_dataset_summary():
     """扫描 dataset/ 目录，返回数据集概要信息"""
     import re
-    base = os.path.join(os.path.dirname(__file__), "..", "dataset")
+    base = os.path.join(os.path.dirname(__file__), "..", "dataset", "ascan_dataset")
     if not os.path.isdir(base):
         return None
 
@@ -669,7 +669,7 @@ def get_dataset_summary():
 def dataset_overview():
     import re
 
-    base = os.path.join(os.path.dirname(__file__), "..", "dataset")
+    base = os.path.join(os.path.dirname(__file__), "..", "dataset", "ascan_dataset")
     result = {
         "total_files": 0,
         "by_defect": {},   # OK: {count, files: [...]}

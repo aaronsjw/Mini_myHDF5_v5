@@ -32,7 +32,7 @@ except ImportError:
     warnings.warn("PyTorch 未安装，深度学习模型不可用")
 
 # 配置常量
-BASE_DIR = os.path.join(os.path.dirname(__file__), "..", "dataset")     # 数据集目录
+BASE_DIR = os.path.join(os.path.dirname(__file__), "..", "dataset", "ascan_dataset")     # 数据集目录
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "models")           # 模型保存目录
 os.makedirs(MODEL_DIR, exist_ok=True)
 

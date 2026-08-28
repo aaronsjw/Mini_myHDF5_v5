@@ -121,7 +121,7 @@ export default function DatabaseOverview() {
                 </Col>
                 <Col span={6}>
                     <Card size="small">
-                        <Statistic title="数据集目录" value="dataset/" />
+                        <Statistic title="AScan 数据目录" value="dataset/ascan_dataset" />
                     </Card>
                 </Col>
             </Row>

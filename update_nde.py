@@ -6,7 +6,7 @@ from sympy import true
 # ==================================================
 # 配置
 # ==================================================
-DATASET_DIR = r"./dataset/TODO"     # 要修改的目录
+DATASET_DIR = r"./dataset/ascan_dataset/TODO"     # 要修改的目录
 
 # # CF8611_AC531_ok，黑色，jyqy反射板
 # FIBER = "CF"
