@@ -40,7 +40,7 @@
 | 缩写 | 含义 |
 |------|------|
 | WRUT | 水耦合反射水膜/水浸单探头 Water |
-| WPUT | 水穿透 |
+| WPUT | 喷水穿透 |
 | DBUT | 延迟块耦合单探头 Delay block |
 | PAUT | 相控阵 |
 | AUT | 空耦 AirUT |

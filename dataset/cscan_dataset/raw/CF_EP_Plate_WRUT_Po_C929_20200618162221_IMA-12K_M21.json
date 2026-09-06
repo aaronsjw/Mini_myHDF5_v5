@@ -1,0 +1,12 @@
+{
+  "method": "WRUT",
+  "structure": "Plate",
+  "defectType": "Po",
+  "code": "C929",
+  "fiber": "CF",
+  "matrix": "EP",
+  "fiberGrade": "IMA-12K",
+  "matrixGrade": "M21",
+  "description": "孔隙率2.33% 超声C扫_反射_孔隙_对比试块——CScan_233.jpg",
+  "probe_type": "5MHz water immersion focusing probe"
+}

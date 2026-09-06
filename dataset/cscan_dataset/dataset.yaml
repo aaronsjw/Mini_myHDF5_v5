@@ -1,0 +1,7 @@
+path: F:/Learn/learn_torch/test/Mini_myHDF5_v5/dataset/cscan_dataset
+train: train.txt
+val: val.txt
+names:
+  0: Dl
+  1: Db
+  2: Po

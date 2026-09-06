@@ -1,0 +1,12 @@
+{
+  "method": "WRUT",
+  "structure": "BondSC",
+  "defectType": "Db",
+  "code": "SYJ",
+  "fiber": "CF",
+  "matrix": "BMI",
+  "fiberGrade": "T700",
+  "matrixGrade": "QY9511",
+  "description": "超声C扫_反射_板芯脱粘_5件蜂窝——02——绿标签向上，在左上和左下/c.BMP",
+  "probe_type": "5MHz water immersion focused"
+}

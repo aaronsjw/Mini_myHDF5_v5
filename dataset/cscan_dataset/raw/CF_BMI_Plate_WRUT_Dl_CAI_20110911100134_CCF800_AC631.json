@@ -1,0 +1,12 @@
+{
+  "method": "WRUT",
+  "structure": "Plate",
+  "defectType": "Dl",
+  "code": "CAI",
+  "fiber": "CF",
+  "matrix": "BMI",
+  "fiberGrade": "CCF800",
+  "matrixGrade": "AC631",
+  "description": "冲击损伤——超声C扫_反射_分层&冲击损伤_零件——CAI-B-4-8.bmp",
+  "probe_type": "5MHz water immersion focusing probe"
+}

@@ -1,0 +1,12 @@
+{
+  "method": "WPUT",
+  "structure": "Plate",
+  "defectType": "Dl",
+  "code": "SYJ",
+  "fiber": "CF",
+  "matrix": "EP",
+  "fiberGrade": "NaN",
+  "matrixGrade": "NaN",
+  "description": "冲击损伤——喷水穿透_平板_分层_1M探头_20230320击穿试块--设备是空耦穿透16.7dB.png",
+  "probe_type": "1M water through-transmission"
+}

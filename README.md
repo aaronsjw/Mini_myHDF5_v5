@@ -63,11 +63,11 @@ Mini_myHDF5_v5/
 │   │   ├── Vo/                           # 空洞
 │   │   └── TODO/                         # 待标注数据
 │   └── cscan_dataset/                    # CScan 图像数据 (YOLO 检测)
-│       ├── images/{train,val}/           # 训练/验证图
-│       ├── labels/{train,val}/           # YOLO txt 标签
-│       ├── meta/{train,val}/             # 边车 JSON 元数据
+│       ├── images/                       # 处理后的片段图（训练时再划分）
+│       ├── labels/                       # YOLO txt 标签
+│       ├── meta/                         # 边车 JSON 元数据
 │       ├── raw/                          # 原始 C 扫数据归档 (含 .dat)
-│       ├── tools/                        # 数据准备脚本
+│       ├── tools/                        # 数据准备脚本（含 split_dataset.py）
 │       └── README.md                     # CScan 数据集设计说明
 │
 ├── standards/                            # 检测标准文档
@@ -95,6 +95,7 @@ Mini_myHDF5_v5/
 ## Backend
 
 ```bash
+f:\Users\aaron\anaconda3\Scripts\activate && conda activate cscan_env
 cd backend
 pip install -r requirements.txt
 uvicorn main:app --reload

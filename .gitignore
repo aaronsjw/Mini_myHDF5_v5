@@ -43,3 +43,25 @@ backend/reports/*.docx
 *.nde
 *.h5
 *.hdf5
+
+# CScan data & derived artifacts (keep code + raw text annotations only)
+dataset/cscan_dataset/images/
+dataset/cscan_dataset/labels/
+dataset/cscan_dataset/meta/
+dataset/cscan_dataset/raw/*.bmp
+dataset/cscan_dataset/raw/*.png
+dataset/cscan_dataset/raw/*.jpg
+dataset/cscan_dataset/raw/*.jpeg
+dataset/cscan_dataset/超声C扫/
+dataset/cscan_dataset/runs/
+dataset/cscan_dataset/train.txt
+dataset/cscan_dataset/val.txt
+dataset/cscan_dataset/labels.cache
+dataset/cscan_dataset/yolo11n.pt
+dataset/cscan_dataset/yolov8n.pt
+
+# CScan 后端推理权重(运行时自动拷贝, 不入库)
+backend/cscan_models/
+
+# 报告模板测试杂物
+backend/reports/_demo_*

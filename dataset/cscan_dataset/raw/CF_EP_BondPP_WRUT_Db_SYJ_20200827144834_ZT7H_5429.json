@@ -1,0 +1,12 @@
+{
+  "method": "WRUT",
+  "structure": "BondPP",
+  "defectType": "Db",
+  "code": "SYJ",
+  "fiber": "CF",
+  "matrix": "EP",
+  "fiberGrade": "ZT7H",
+  "matrixGrade": "5429",
+  "description": "超声C扫_反射_板板脱粘_T形筋板板胶接——c——T向上，板板胶接的上板的层波.BMP",
+  "probe_type": "5MHz water immersion focusing probe"
+}
