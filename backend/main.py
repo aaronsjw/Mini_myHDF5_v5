@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware              # 跨域资源�
 import tempfile         # 临时文件
 import os
 import json
+import re               # 正则
 import h5py
 import numpy as np
 import pandas as pd
@@ -729,6 +730,119 @@ def dataset_overview():
         result["total_files"] += len(files_info)
 
     return result
+
+
+# ── CScan 数据库概览 ──────────────────────────────────────────
+CSCAN_RAW_DIR = os.path.join(os.path.dirname(__file__), "..", "dataset", "cscan_dataset", "raw")
+CSCAN_IMAGE_EXTS = {".bmp", ".png", ".jpg", ".jpeg"}
+_CSCAN_PATTERN = re.compile(
+    r"^(\w+)_(\w+)_(\w+)_(\w+)_(\w+)_(\w+)_(\d{14})_(.+)\.(?:bmp|png|jpe?g)$",
+    re.IGNORECASE,
+)
+
+
+def _read_cscan_sidecar(stem, base_dir=CSCAN_RAW_DIR):
+    """读取与图片同名的边车 JSON（UTF-8，含中文 description）。
+    缺失/解析失败 → 回退空 dict。"""
+    p = os.path.join(base_dir, stem + ".json")
+    if not os.path.isfile(p):
+        return {}
+    try:
+        with open(p, encoding="utf-8") as f:
+            d = json.load(f)
+        return d or {}
+    except Exception:
+        return {}
+
+
+def get_cscan_summary():
+    """扫描 cscan_dataset/raw/，以边车 JSON 为权威字段，返回与
+    get_dataset_summary() 同形的概要（后续可复用 build_dataset_block）。"""
+    base = CSCAN_RAW_DIR
+    if not os.path.isdir(base):
+        return None
+
+    defect_types, fibers, matrixes, structures, methods = set(), set(), set(), set(), set()
+    total, by_defect = 0, {}
+
+    for fname in sorted(os.listdir(base)):
+        if os.path.splitext(fname)[1].lower() not in CSCAN_IMAGE_EXTS:
+            continue
+        meta = _read_cscan_sidecar(os.path.splitext(fname)[0], base)
+        defect = meta.get("defectType") or "?"
+        defect_types.add(defect)
+        if meta.get("fiber"):      fibers.add(meta["fiber"])
+        if meta.get("matrix"):     matrixes.add(meta["matrix"])
+        if meta.get("structure"):  structures.add(meta["structure"])
+        if meta.get("method"):     methods.add(meta["method"])
+        by_defect[defect] = by_defect.get(defect, 0) + 1
+        total += 1
+
+    return {
+        "total_files": total,
+        "defect_types": sorted(defect_types),
+        "by_defect": by_defect,
+        "fibers": sorted(fibers),
+        "matrixes": sorted(matrixes),
+        "structures": sorted(structures),
+        "methods": sorted(methods),
+    }
+
+
+@app.get("/cscan_dataset")
+def cscan_dataset():
+    """CScan 数据库概览：按缺陷类型分组，边车 JSON 为权威字段来源。
+    返回形状与 /dataset_overview 兼容（DatabaseOverview 可复用），
+    额外带 fiberGrade/matrixGrade/probe_type/description。"""
+    base = CSCAN_RAW_DIR
+    if not os.path.isdir(base):
+        return {"error": "cscan raw dir not found"}
+
+    result = {"total_files": 0, "by_defect": {}, "files": []}
+
+    for fname in sorted(os.listdir(base)):
+        if os.path.splitext(fname)[1].lower() not in CSCAN_IMAGE_EXTS:
+            continue
+        stem = os.path.splitext(fname)[0]
+        meta = _read_cscan_sidecar(stem, base)
+        m = _CSCAN_PATTERN.match(fname)
+
+        info = {
+            "filename":    fname,
+            "fiber":       meta.get("fiber")      or (m.group(1) if m else "-"),
+            "matrix":      meta.get("matrix")     or (m.group(2) if m else "-"),
+            "structure":   meta.get("structure")  or (m.group(3) if m else "-"),
+            "method":      meta.get("method")     or (m.group(4) if m else "-"),
+            "defect":      meta.get("defectType") or (m.group(5) if m else "-"),
+            "model":       meta.get("code")       or (m.group(6) if m else "-"),
+            "timestamp":   m.group(7) if m else "-",
+            "fiberGrade":  meta.get("fiberGrade")  or "-",
+            "matrixGrade": meta.get("matrixGrade") or "-",
+            "probe_type":  meta.get("probe_type")  or "-",
+            "description": meta.get("description") or "-",
+        }
+
+        defect = info["defect"]
+        result["by_defect"].setdefault(defect, {"count": 0, "files": []})
+        result["by_defect"][defect]["files"].append(info)
+        result["by_defect"][defect]["count"] += 1
+        result["files"].append(info)
+        result["total_files"] += 1
+
+    if result["total_files"] == 0:
+        return {"error": "cscan raw dir is empty"}
+    return result
+
+
+@app.get("/cscan/image")
+def cscan_image(name: str):
+    """返回 raw/ 下的 CScan 原图。文件名白名单校验防路径穿越。"""
+    if not name or os.path.basename(name) != name:
+        return {"error": "invalid filename"}
+    path = os.path.join(CSCAN_RAW_DIR, name)
+    if not os.path.isfile(path):
+        return {"error": "image not found"}
+    return FileResponse(path)
 
 # endregion
 

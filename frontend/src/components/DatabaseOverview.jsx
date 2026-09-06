@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Table, Tag, Statistic, Row, Col, Spin } from 'antd'
+import { Card, Table, Tag, Statistic, Row, Col, Spin, Tooltip } from 'antd'
 import axios from 'axios'
 
 // 命名规则中 缺陷类型 对应的中文
@@ -34,16 +34,23 @@ const FIELD_LABELS = {
     timestamp: '时间戳'
 }
 
-export default function DatabaseOverview() {
+export default function DatabaseOverview({
+    endpoint = 'http://127.0.0.1:8000/dataset_overview',
+    dirLabel = 'AScan 数据目录',
+    dirPath = 'dataset/ascan_dataset',
+    extraColumns = [],
+    imageUrlFn = null,
+    mergeMaterial = false,
+}) {
     const [data, setData] = useState(null)
     const [loading, setLoading] = useState(true)
 
     useEffect(() => {
-        axios.get('http://127.0.0.1:8000/dataset_overview')
+        axios.get(endpoint)
             .then(res => setData(res.data))
             .catch(err => console.error(err))
             .finally(() => setLoading(false))
-    }, [])
+    }, [endpoint])
 
     if (loading) return <Spin size="large" style={{ display: 'block', marginTop: 100 }} />
     if (!data || data.error) return <div style={{ padding: 40, color: '#999' }}>未找到 dataset 目录</div>
@@ -78,9 +85,32 @@ export default function DatabaseOverview() {
 
     // 文件详情列
     const fileColumns = [
+        ...(imageUrlFn ? [{
+            title: '图像', dataIndex: 'image', key: 'image', width: 90,
+            render: (_, r) => {
+                const url = imageUrlFn(r.filename)
+                if (!url) return '-'
+                return (
+                    <Tooltip
+                        title={
+                            <img src={url} alt={r.filename}
+                                 style={{ maxWidth: 600, maxHeight: 400, objectFit: 'contain', display: 'block' }} />
+                        }
+                        mouseEnterDelay={0.1}
+                    >
+                        <img src={url} alt={r.filename}
+                             style={{ height: 60, objectFit: 'contain', border: '1px solid #eee', borderRadius: 4, cursor: 'zoom-in' }} />
+                    </Tooltip>
+                )
+            }
+        }] : []),
         { title: '文件名', dataIndex: 'filename', key: 'filename', width: 320, ellipsis: true },
-        { title: '纤维类型', dataIndex: 'fiber', key: 'fiber', width: 80 },
-        { title: '基体类型', dataIndex: 'matrix', key: 'matrix', width: 80 },
+        ...(mergeMaterial
+            ? [{ title: '纤维/基体', key: 'fiberMatrix', width: 90, render: (_, r) => `${r.fiber}/${r.matrix}` }]
+            : [
+                { title: '纤维类型', dataIndex: 'fiber', key: 'fiber', width: 80 },
+                { title: '基体类型', dataIndex: 'matrix', key: 'matrix', width: 80 },
+            ]),
         { title: '结构', dataIndex: 'structure', key: 'structure', width: 100 },
         { title: '检测方法', dataIndex: 'method', key: 'method', width: 90 },
         {
@@ -97,6 +127,7 @@ export default function DatabaseOverview() {
             }
         },
         { title: '型号', dataIndex: 'model', key: 'model', width: 80 },
+        ...extraColumns,
     ]
 
     return (
@@ -121,7 +152,7 @@ export default function DatabaseOverview() {
                 </Col>
                 <Col span={6}>
                     <Card size="small">
-                        <Statistic title="AScan 数据目录" value="dataset/ascan_dataset" />
+                        <Statistic title={dirLabel} value={dirPath} />
                     </Card>
                 </Col>
             </Row>

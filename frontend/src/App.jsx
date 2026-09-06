@@ -617,8 +617,19 @@ export default function App() {
                 <div style={{ height: '100%', overflow: 'auto', display: activeModule === 'dataset' ? 'block' : 'none' }}>
                     {(() => {
                         if (datasetPath === 'ultrasonic/ascan') return <DatabaseOverview />
+                        if (datasetPath === 'ultrasonic/cscan') return (
+                            <DatabaseOverview
+                                endpoint="http://127.0.0.1:8000/cscan_dataset"
+                                dirLabel="CScan 数据目录"
+                                dirPath="dataset/cscan_dataset/raw"
+                                mergeMaterial
+                                imageUrlFn={filename => `http://127.0.0.1:8000/cscan/image?name=${encodeURIComponent(filename)}`}
+                                extraColumns={[
+                                    { title: '牌号', key: 'grade', width: 130, render: (_, r) => `${r.fiberGrade}/${r.matrixGrade}` },
+                                ]}
+                            />
+                        )
                         const placeholderMap = {
-                            'ultrasonic/cscan': '超声 CScan 数据库（待开发）',
                             'ultrasonic/paut': '超声相控阵 PAUT（待开发）',
                             'ultrasonic/guidedwave': '导波 GW（待开发）',
                             'ultrasonic/ae': '声发射 AE（待开发）',
