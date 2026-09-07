@@ -128,7 +128,9 @@ def build_acceptance_result_block(result, defect_type) -> str:
     ctx += f"- 判定：{status}\n"
     ctx += f"- 理由：{result['reason']}\n"
     for v in result.get('violations', []):
-        ctx += f"  - [{v['level']}级] {v['description']}（{v['action']}）\n"
+        lvl = str(v.get('level', ''))
+        tag = lvl if (lvl.endswith('级') or lvl == '警告') else f'{lvl}级'
+        ctx += f"  - [{tag}] {v['description']}（{v['action']}）\n"
     for sug in result.get('suggestions', []):
         ctx += f"  - 💡 {sug}\n"
     if result.get('needs_cscan'):
@@ -197,3 +199,79 @@ def build_local_model_content(prediction) -> str:
     content += """
 > 当前使用本地模型进行评估，如需更详细的分析（信号特征、材料参数等），请切换至 **DeepSeek 云端** 模式。"""
     return content
+
+
+# ── C-Scan 检测结果块 ──
+def _fmt(v, nd=2):
+    """数值格式化: None -> '-', 否则保留 nd 位小数。"""
+    if v is None:
+        return "-"
+    return f"{float(v):.{nd}f}"
+
+
+def build_cscan_block(cscan_context) -> str:
+    """构造 C-Scan 检测结果块（供 AI 综合 A扫+C扫 判定）。
+
+    cscan_context 取 /cscan/analyze 响应:
+    {
+      "authoritative_defect_type": "分层",
+      "authoritative_defect_abbr": "Dl",
+      "authoritative_source": "v5_ascan" | "yolo_map",
+      "cscan": {"image": {...}, "mm_per_px": ..., "detections": [...], "stats": {...}},
+      "v5_context": {...}
+    }
+    """
+    d = cscan_context or {}
+    auth_zh = d.get("authoritative_defect_type") or "未知"
+    auth_abbr = d.get("authoritative_defect_abbr") or ""
+    src = d.get("authoritative_source") or ""
+    src_zh = {"v5_ascan": "v5 A-Scan 模型（权威）", "yolo_map": "YOLO 推断（建议以 v5 A-Scan 为准）"}.get(src, src or "-")
+
+    cscan = d.get("cscan") or {}
+    img = cscan.get("image") or {}
+    stats = cscan.get("stats") or {}
+    mm = cscan.get("mm_per_px")
+    dets = cscan.get("detections") or []
+    v5 = d.get("v5_context") or {}
+
+    ctx = f"\n\n## C-Scan 检测结果\n"
+    ctx += ("请按【A扫/C扫证据 → 综合缺陷判断 → 验收结论】的顺序回复：结合 A-Scan 缺陷类型与 C-Scan 缺陷定位/物理尺寸，"
+            "给出综合判定与建议；若 C-Scan 与 A-Scan 结论冲突，明确提示需人工复核。\n")
+    ctx += f"- 权威缺陷类型：{auth_zh}（{auth_abbr}），来源：{src_zh}\n"
+    if mm:
+        ctx += (f"- 图幅：{img.get('width')}×{img.get('height')} px；"
+                f"物理尺寸 {_fmt(img.get('physical_w_mm'))}×{_fmt(img.get('physical_h_mm'))} mm；"
+                f"比例 {_fmt(mm, 4)} mm/px\n")
+    else:
+        ctx += f"- 图幅：{img.get('width')}×{img.get('height')} px；未提供 mm/px，无法换算物理尺寸\n"
+
+    if dets:
+        ctx += "- 检出缺陷（定位框 + 物理尺寸）：\n"
+        ctx += "| # | 类别 | 置信度 | w×h(mm) | Z=(X+Y)/2(mm) | 面积(mm²) | 面积占比 |\n"
+        ctx += "|---|------|--------|---------|---------------|-----------|---------|\n"
+        for det in dets:
+            wh = f"{_fmt(det.get('w_mm'))}×{_fmt(det.get('h_mm'))}" if det.get('w_mm') is not None else "-"
+            ctx += (f"|{det['index'] + 1}|{det['class_name_zh']}|{det['confidence']:.0%}|{wh}|"
+                    f"{_fmt(det.get('z_mm'))}|{_fmt(det.get('area_mm2'))}|{_fmt(det.get('area_pct'), 3)}%|\n")
+        s = "；".join(
+            f"{pc['class_name_zh']}{pc['count']}处"
+            for pc in stats.get("per_class", [])
+        )
+        ctx += f"- 统计：共 {stats.get('count', 0)} 处缺陷（{s}）；"
+        ctx += (f"总面积 {_fmt(stats.get('total_area_mm2'))} mm²（占比 {_fmt(stats.get('total_area_pct'), 3)}%）；"
+                f"最大 Z {_fmt(stats.get('max_z_mm'))} mm" if mm else
+                f"最大 Z/面积未算（缺 mm/px）")
+        if stats.get("min_edge_gap_mm") is not None:
+            ctx += f"；相邻缺陷最小间距 {_fmt(stats.get('min_edge_gap_mm'))} mm（<100mm 提示合并计算）"
+    else:
+        ctx += "- 检出：未检出任何缺陷框\n"
+
+    if v5.get("has_nde"):
+        ctx += (f"- A-Scan 上下文：{v5.get('filename') or '-'}，"
+                f"A扫判定 {v5.get('ascan_defect_type') or '未知'}（{v5.get('ascan_defect_abbr') or '-'}）"
+                f"，置信度 {v5.get('ascan_confidence') or '-'}\n")
+    else:
+        ctx += "- A-Scan 上下文：未加载 .nde 文件（缺陷类型由 YOLO 推断，非权威）\n"
+
+    ctx += "- 请综合以上信息判定缺陷是否超标，并给出后续建议（复测/返修/放行）。\n"
+    return ctx

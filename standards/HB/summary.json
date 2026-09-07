@@ -40,6 +40,7 @@
       "needs_cscan": true,
       "cscan_criteria": "Z=(X+Y)/2，A级 Z≤10mm、B级 Z≤13mm、C级 Z≤19mm 为合格；两缺陷边缘距离≥100mm",
       "cscan_action": "不合格",
+      "cscan_thresholds": {"grade_field": "cscan_z_value", "grade_values": {"A": 10, "B": 13, "C": 19}, "compare": ">", "edge_field": "cscan_edge_gap_min_mm", "edge_min": 100, "action": "不合格"},
       "note": "分层超对应等级规定尺寸为不合格（表7），尺寸判定需 CScan"
     },
     {
@@ -68,6 +69,7 @@
       "needs_cscan": true,
       "cscan_criteria": "累积缺陷面积占比：A 级≤10%、B 级≤15%、C 级≤25%（表6）；超出为不合格",
       "cscan_action": "不合格",
+      "cscan_thresholds": {"grade_field": "cscan_area_pct", "grade_values": {"A": 10, "B": 15, "C": 25}, "compare": ">", "action": "不合格"},
       "note": "密集空隙以超声波衰减率判定（10MHz/70%、5MHz/50%、2.5MHz/25%），面积占比需 CScan"
     },
     {
@@ -83,7 +85,8 @@
       ],
       "needs_cscan": true,
       "cscan_criteria": "Z=(X+Y)/2，A 级 Z≤10mm、B 级 Z≤13mm、C 级 Z≤19mm 为合格；两缺陷边缘距离≥100mm",
-      "cscan_action": "不合格"
+      "cscan_action": "不合格",
+      "cscan_thresholds": {"grade_field": "cscan_z_value", "grade_values": {"A": 10, "B": 13, "C": 19}, "compare": ">", "edge_field": "cscan_edge_gap_min_mm", "edge_min": 100, "action": "不合格"}
     },
     {
       "defect_type": "脱粘",
@@ -105,6 +108,7 @@
       "needs_cscan": true,
       "cscan_criteria": "胶接空隙和脱粘按表5 Z值尺寸判定；密集空隙按表6 面积占比判定",
       "cscan_action": "不合格",
+      "cscan_thresholds": {"grade_field": "cscan_z_value", "grade_values": {"A": 10, "B": 13, "C": 19}, "compare": ">", "grade_field2": "cscan_area_pct", "grade_values2": {"A": 10, "B": 15, "C": 25}, "edge_field": "cscan_edge_gap_min_mm", "edge_min": 100, "action": "不合格"},
       "note": "板/板、板/芯胶接件脱粘需 CScan 确认尺寸（表8）"
     },
     {
@@ -120,7 +124,8 @@
       ],
       "needs_cscan": true,
       "cscan_criteria": "按表5 Z值尺寸判定：A级≤10mm、B级≤13mm、C级≤19mm",
-      "cscan_action": "不合格"
+      "cscan_action": "不合格",
+      "cscan_thresholds": {"grade_field": "cscan_z_value", "grade_values": {"A": 10, "B": 13, "C": 19}, "compare": ">", "action": "不合格"}
     },
     {
       "defect_type": "富树脂",
@@ -136,6 +141,7 @@
       "needs_cscan": true,
       "cscan_criteria": "X 射线成像呈现亮光区；面积超表6 要求为不合格",
       "cscan_action": "不合格",
+      "cscan_thresholds": {"grade_field": "cscan_area_pct", "grade_values": {"A": 10, "B": 15, "C": 25}, "compare": ">", "action": "不合格"},
       "note": "富树脂区需 X 射线成像确认，面积占比按表6 执行"
     }
   ],

@@ -17,6 +17,19 @@ import os
 import re
 from typing import Optional
 
+# CScan 机器阈值字段：中文名与单位（仅用于 reason 文案）
+_CSCAN_FIELD_ZH = {
+    "cscan_z_value": "缺陷投影尺寸 Z=(X+Y)/2",
+    "cscan_area_pct": "缺陷面积占比",
+    "cscan_max_dim_mm": "最大缺陷尺寸",
+    "cscan_edge_gap_min_mm": "相邻缺陷最小间距",
+    "cscan_count": "检出缺陷数",
+}
+_CSCAN_UNIT = {
+    "cscan_z_value": "mm", "cscan_max_dim_mm": "mm",
+    "cscan_edge_gap_min_mm": "mm", "cscan_area_pct": "%", "cscan_count": "",
+}
+
 # 验收判定类
 class AcceptanceChecker:
     def __init__(self, standards_dir: str = None):
@@ -132,6 +145,9 @@ class AcceptanceChecker:
         defect_type = detection_result.get("defect_type", "")
         defect_type_en = detection_result.get("defect_type_en", "")
         features = detection_result.get("signal_features", {})
+        # 质量控制等级: 请求显式 grade 优先, 否则取标准默认 (HB 默认 C)
+        grade = detection_result.get("grade") or standard.get("default_grade") or "C"
+        cscan_evaluated = False
 
         # 查找匹配缺陷类型的条款
         criteria = self._find_criteria(standard, defect_type, defect_type_en)
@@ -161,22 +177,53 @@ class AcceptanceChecker:
 
         # 判断是否超标：按 action 定级 + 是否需要 CScan 尺寸
         needs_cscan = criteria.get("needs_cscan", False)
-        if violations:
-            fatal = [v for v in violations if v["action"] == "不合格"]
-            warnings = [v for v in violations if v["action"] != "不合格"]
-            if fatal:
-                # 信号层面已足以判定不合格（如底波消失=脱粘），无需尺寸
+        fatal = [v for v in violations if v["action"] == "不合格"]
+        warnings = [v for v in violations if v["action"] != "不合格"]
+        has_cscan_size = any(
+            k in features and features[k] is not None
+            for k in ("cscan_z_value", "cscan_area_pct", "cscan_max_dim_mm")
+        )
+        # CScan 已检出缺陷(cscan_count>0) 但缺尺寸特征(没给 mm/px) → 无法换算物理尺寸
+        cscan_unsized = not has_cscan_size and int(features.get("cscan_count", 0) or 0) > 0
+
+        if fatal:
+            # 信号层面已足以判定不合格（如底波消失=脱粘），无需尺寸
+            passed = False
+            reason = "不合格：" + "；".join([v["description"] for v in fatal])
+            if warnings:
+                reason += f"。另有警告：{'；'.join([v['description'] for v in warnings])}"
+        elif needs_cscan and has_cscan_size:
+            # needs_cscan 缺陷且带 CScan 尺寸特征 → 机器阈值判定（与 AScan 是否有可疑无关）
+            cs = self._eval_cscan(criteria, features, grade)
+            cs_fatal = [v for v in cs if v["action"] == "不合格"]
+            cs_warn = [v for v in cs if v["action"] != "不合格"]
+            violations = violations + cs
+            cscan_evaluated = True
+            if cs_fatal:
                 passed = False
-                reason = "不合格：" + "；".join([v["description"] for v in fatal])
-                if warnings:
-                    reason += f"。另有警告：{'；'.join([v['description'] for v in warnings])}"
-            elif needs_cscan:
-                # 只触发"可疑"级，且该缺陷的合格判定依赖尺寸（AScan 给不出尺寸）→ 无法判定
-                passed = None
-                reason = "无法判定，需补充尺寸信息：" + "；".join([v["description"] for v in warnings])
+                reason = "不合格（CScan 尺寸判定）：" + "；".join(v["description"] for v in cs_fatal)
+                if cs_warn:
+                    reason += f"。另：{'；'.join(v['description'] for v in cs_warn)}"
+            elif cs_warn:
+                passed = True
+                reason = "合格（CScan 尺寸判定），但 " + "；".join(v["description"] for v in cs_warn)
             else:
                 passed = True
-                reason = "合格，但有需要注意的事项：" + "；".join([v["description"] for v in violations])
+                reason = f"合格（CScan 尺寸判定），尺寸/面积均未超 {grade} 级限值"
+                if warnings:
+                    reason += "。AScan 另有提示：" + "；".join([v["description"] for v in warnings])
+        elif needs_cscan and (warnings or cscan_unsized):
+            # needs_cscan 但缺尺寸特征 -> 无法判定：
+            #   - 纯 AScan 可疑(无 CScan) 维持原文案；CScan 检出缺陷但没给 mm/px 则追加说明
+            passed = None
+            if warnings:
+                reason = "无法判定，需补充尺寸信息：" + "；".join(v["description"] for v in warnings)
+                if cscan_unsized:
+                    reason += (f"。CScan 检出 {int(features.get('cscan_count', 0))} 处缺陷，"
+                               "但未提供 mm/px 比例尺，无法换算物理尺寸")
+            else:
+                reason = (f"无法判定：CScan 检出 {int(features.get('cscan_count', 0))} 处缺陷，"
+                          "但未提供 mm/px 比例尺，无法换算物理尺寸")
         else:
             passed = True
             reason = "合格，未触发任何验收条款"
@@ -203,6 +250,8 @@ class AcceptanceChecker:
             "suggestions": suggestions,
             "needs_cscan": needs_cscan,
             "cscan_criteria": criteria.get("cscan_criteria", None),
+            "cscan_grade": grade,
+            "cscan_evaluated": cscan_evaluated,
         }
 
     # 辅助方法
@@ -290,6 +339,60 @@ class AcceptanceChecker:
         elif op == "!=":
             return actual_float != val, detail
         return False, detail
+
+    # CScan 尺寸/面积机器阈值判定
+    def _eval_cscan(self, criteria: dict, features: dict, grade: str) -> list:
+        """按 cscan_thresholds 机器阈值判定 CScan 尺寸/面积是否超限。
+
+        返回 violations 列表：
+        - 尺寸(Z)/面积超对应等级限值 -> action = 不合格
+        - 相邻缺陷边缘间距 < edge_min   -> action = 警告（应合并计算，不直接判不合格）
+        """
+        thr = criteria.get("cscan_thresholds")
+        if not thr:
+            return []
+        op = thr.get("compare", ">")
+        action = thr.get("action", "不合格")
+        out = []
+
+        # 单/双判据: grade_field (Z 表) + grade_field2 (面积表)
+        for field, gv_key in ((thr.get("grade_field"), "grade_values"),
+                              (thr.get("grade_field2"), "grade_values2")):
+            if not field or field not in features:
+                continue
+            val = features[field]
+            if val is None:
+                continue
+            limit = (thr.get(gv_key) or {}).get(grade)
+            if limit is None:
+                continue
+            exceeded = float(val) > float(limit) if op == ">" else float(val) < float(limit)
+            if exceeded:
+                zh = _CSCAN_FIELD_ZH.get(field, field)
+                unit = _CSCAN_UNIT.get(field, "")
+                out.append({
+                    "level": f"{grade} 级",
+                    "description": f"CScan {zh}={val:.2f}{unit} 超 {grade} 级限值 {limit}{unit}",
+                    "detail": f"{field}={val} {op} {limit}",
+                    "action": action,
+                    "source": "cscan",
+                })
+
+        # 相邻缺陷间距不足 -> 应合并计算的警告
+        edge_field = thr.get("edge_field")
+        edge_min = thr.get("edge_min")
+        if edge_field and edge_field in features:
+            gap = features[edge_field]
+            if gap is not None and float(gap) < float(edge_min):
+                zh = _CSCAN_FIELD_ZH.get(edge_field, edge_field)
+                out.append({
+                    "level": "警告",
+                    "description": f"CScan {zh}={gap:.2f}mm < {edge_min}mm，按标准应合并计算",
+                    "detail": f"{edge_field}={gap} < {edge_min}",
+                    "action": "警告",
+                    "source": "cscan",
+                })
+        return out
 
     # 自动匹配标准
     def suggest_standard(self, meta: dict) -> Optional[str]:

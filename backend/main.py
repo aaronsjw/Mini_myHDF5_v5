@@ -41,11 +41,29 @@ from signal_analysis import analyze_signal, load_nde_meta, analyze_waveform_per_
 from deepseek_client import chat_stream
 ## 验收判定
 from acceptance_checker import AcceptanceChecker
+## CScan YOLO 推理
+from cscan_yolo import (
+    ultralytics_available, list_cscan_models, analyze_cscan,
+    build_cscan_features, V5_ABBR_TO_ZH,
+)
+## CScan 原图入库 / 标注（切片与类表）
+from cscan_ingest import (
+    read_classes, add_class, normalize_stem, slice_raw_image,
+    find_raw_image, parse_yolo, CODE_ZH,
+)
+## CScan YOLO 训练 / 验证评估（web 后台任务）
+from cscan_trainer import (
+    start_cscan_train, get_cscan_train_status, get_cscan_train_result,
+    start_cscan_eval, get_cscan_eval_status, get_cscan_eval_result,
+    list_cscan_model_meta, RUNS_DIR, MODELS_DIR as CSCAN_MODELS_DIR_T,
+    PRETRAINED as CSCAN_PRETRAINED,
+)
 ## 提示词模板
 from prompts import (
     build_system_prompt, build_no_file_prompt,
     build_dataset_block, build_acceptance_index_block, build_acceptance_result_block,
     build_dispute_block, build_dispatch_block, build_local_model_content,
+    build_cscan_block,
 )
 
 ## 请求体模型
@@ -848,6 +866,291 @@ def cscan_image(name: str):
 
 
 # ══════════════════════════════════════════════════
+# 4. CScan 图像智能检测 API (YOLO → 尺寸 → 验收)
+# ══════════════════════════════════════════════════
+# region CScan YOLO
+
+def _best_ascan_prediction():
+    """对已上传的 current_file(.nde) 跑 AScan 预测，返回
+    (prediction_abbr, confidence, signal_features)；无文件/失败回退 (None, None, {})。
+    缺陷类型的权威来源是 v5 AScan（YOLO 只管定位/尺寸）。"""
+    if not current_file or not os.path.exists(current_file):
+        return None, None, {}
+    sig_features = {}
+    try:
+        sig = analyze_signal(current_file)
+        sig_features = {k: v for k, v in sig.items() if isinstance(v, (int, float))} if sig else {}
+        sig_features["detected_frames"] = 64
+    except Exception:
+        pass
+    try:
+        models = list_models()
+        if not models:
+            return None, None, sig_features
+        pred = predict_single_file(current_file, models[0]["model_name"])
+        if "error" in pred:
+            return None, None, sig_features
+        return pred.get("prediction"), pred.get("confidence"), sig_features
+    except Exception:
+        return None, None, sig_features
+
+
+@app.get("/cscan/models")
+def cscan_models():
+    """可用 CScan YOLO 模型清单 + ultralytics 可用性。"""
+    try:
+        models = list_cscan_models()
+    except Exception as e:
+        return {"available": ultralytics_available(), "models": [], "note": str(e)}
+    note = "ultralytics 未安装" if not ultralytics_available() else \
+        ("未找到模型权重（backend/cscan_models 为空）" if not models else "")
+    return {"available": ultralytics_available(), "models": models, "note": note}
+
+
+@app.post("/cscan/analyze")
+async def cscan_analyze(
+    file: UploadFile = File(...),
+    mm_per_px: float = Form(None),
+    model: str = Form(None),
+    conf: float = Form(0.35),
+    iou: float = Form(0.45),
+    standard_id: str = Form(None),
+    grade: str = Form("C"),
+):
+    """CScan 图像分析：自动切块 YOLO 检测 → 物理尺寸 → 验收判定。
+
+    返回 {cscan, v5_context, authoritative_*, merged_features, acceptance, discrepancy_warning}"""
+    if not ultralytics_available():
+        return {"error": "ultralytics 未安装（请用 cscan_env 运行后端）"}
+
+    suffix = os.path.splitext(file.filename or "upload")[1].lower()
+    if suffix not in CSCAN_IMAGE_EXTS:
+        return {"error": f"仅支持图片格式: {sorted(CSCAN_IMAGE_EXTS)}"}
+
+    # 解析模型名 → 权重路径
+    model_path = model or ""
+    if model_path:
+        for m in list_cscan_models():
+            if m["name"] == model_path or m["path"] == model_path:
+                model_path = m["path"]
+                break
+
+    # 保存上传图片到临时文件并推理
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    tmp.write(await file.read())
+    tmp.close()
+    try:
+        res = analyze_cscan(tmp.name, model_path=model_path, mm_per_px=mm_per_px,
+                            conf=conf, iou=iou)
+    except Exception as e:
+        return {"error": f"CScan 分析失败: {e}"}
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
+    # ── 权威缺陷类型（v5 AScan 优先，YOLO 兜底/定位）──
+    ascan_pred, ascan_conf, sig_features = _best_ascan_prediction()
+    meta = {}
+    try:
+        if current_file and os.path.exists(current_file):
+            meta = load_nde_meta(current_file) or {}
+    except Exception:
+        meta = {}
+
+    detections = res["detections"]
+    if ascan_pred and ascan_pred != "OK" and ascan_pred in V5_ABBR_TO_ZH:
+        auth_abbr, auth_source = ascan_pred, "v5_ascan"
+    elif detections:
+        top = max(detections, key=lambda d: d["confidence"])
+        auth_abbr, auth_source = top["class_name_en"], "yolo_map"
+    else:
+        auth_abbr, auth_source = (ascan_pred if ascan_pred in V5_ABBR_TO_ZH else ""), "v5_ascan"
+    auth_type = V5_ABBR_TO_ZH.get(auth_abbr, "")
+
+    # 类型不一致/AScan 判 OK 但 CScan 有检出 → 提示
+    discrepancy = None
+    det_abbrs = {d["class_name_en"] for d in detections}
+    if ascan_pred:
+        if ascan_pred == "OK" and detections:
+            discrepancy = ("v5 AScan 判定为「无缺陷(OK)」，但 CScan 检出缺陷 "
+                           f"{'/'.join(sorted(det_abbrs))}，建议人工复核")
+        elif ascan_pred in V5_ABBR_TO_ZH and ascan_pred != auth_abbr and det_abbrs:
+            discrepancy = (f"v5 AScan 判定为 {V5_ABBR_TO_ZH.get(ascan_pred, ascan_pred)}({ascan_pred})，"
+                           f"CScan 检出的缺陷类别为 {'/'.join(sorted(det_abbrs))}，两者不一致，建议人工复核")
+
+    # 合并特征：AScan 数值特征 + CScan 尺寸特征（仅保留标量，规则引擎只认标量）
+    feats = dict(sig_features)
+    feats.update(build_cscan_features(res["stats"], auth_abbr))
+    merged = {k: v for k, v in feats.items()
+              if isinstance(v, (int, float)) and not isinstance(v, bool)}
+
+    # ── 验收判定（HB 尺寸/面积阈值 + grade）──
+    acceptance = None
+    try:
+        checker = get_checker()
+        if not standard_id:
+            standard_id = checker.suggest_standard(meta)
+        if not standard_id:
+            idx = checker.get_index()
+            standard_id = idx[0].get("id") if idx else None
+        if standard_id and auth_abbr and auth_abbr != "OK":
+            acceptance = checker.check(standard_id, {
+                "defect_type": auth_type,
+                "defect_type_en": auth_abbr,
+                "confidence": ascan_conf or 0,
+                "signal_features": merged,
+                "grade": grade or "C",
+                "prediction": {},
+            })
+    except Exception as e:
+        acceptance = {"error": str(e)}
+
+    v5_context = {
+        "has_nde": bool(current_file and os.path.exists(current_file)),
+        "filename": current_filename if (current_file and os.path.exists(current_file)) else "",
+        "ascan_defect_type": V5_ABBR_TO_ZH.get(ascan_pred) if ascan_pred else None,
+        "ascan_defect_abbr": ascan_pred,
+        "ascan_confidence": ascan_conf,
+    }
+
+    return {
+        "cscan": res,
+        "v5_context": v5_context,
+        "authoritative_defect_type": auth_type,
+        "authoritative_defect_abbr": auth_abbr,
+        "authoritative_source": auth_source,
+        "merged_features": merged,
+        "acceptance": acceptance,
+        "discrepancy_warning": discrepancy,
+    }
+
+# endregion
+
+
+# ══════════════════════════════════════════════════
+# CScan 原图入库 / 标注（raw 三件套 + 自动切片）
+# ══════════════════════════════════════════════════
+# region CScan Ingest
+
+CSCAN_DATASET_DIR = os.path.dirname(CSCAN_RAW_DIR)
+CSCAN_IMAGES_DIR = os.path.join(CSCAN_DATASET_DIR, "images")
+CSCAN_LABELS_DIR = os.path.join(CSCAN_DATASET_DIR, "labels")
+CSCAN_META_DIR = os.path.join(CSCAN_DATASET_DIR, "meta")
+CSCAN_CLASSES_TXT = os.path.join(CSCAN_RAW_DIR, "labels.txt")
+CSCAN_CODES_JSON = os.path.join(CSCAN_DATASET_DIR, "codes.json")
+
+
+def _cscan_class_list():
+    """labels.txt 行序(=class_id) + codes.json/CODE_ZH 中文名，供标注下拉。"""
+    codes = read_classes(CSCAN_CLASSES_TXT)
+    zh = {}
+    try:
+        with open(CSCAN_CODES_JSON, encoding="utf-8") as f:
+            for c in json.load(f):
+                zh[c["code"]] = c.get("zh", c["code"])
+    except Exception:
+        pass
+    return [{"id": i, "code": c, "zh": zh.get(c, CODE_ZH.get(c, c))} for i, c in enumerate(codes)]
+
+
+@app.get("/cscan/classes")
+def cscan_classes():
+    """CScan 标注可用的缺陷类别（行号 = class_id）。"""
+    try:
+        return {"classes": _cscan_class_list(), "ok_class": "OK"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/cscan/classes/add")
+def cscan_classes_add(req: dict):
+    """新增缺陷码：写 raw/labels.txt + codes.json，返回 id（已存在则返回旧 id）。"""
+    try:
+        code = str(req.get("code", "")).strip()
+        nid = add_class(CSCAN_CLASSES_TXT, CSCAN_CODES_JSON, code, str(req.get("zh", "")).strip())
+        return {"id": nid, "code": code}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/cscan/raw/item")
+def cscan_raw_item(stem: str):
+    """读 raw/ 某 stem 的边车 + 标注框，供"打开已有图续标"。"""
+    if not stem or os.path.basename(stem) != stem:
+        return {"error": "invalid stem"}
+    img = find_raw_image(CSCAN_RAW_DIR, stem)
+    if not img:
+        return {"error": "raw 图不存在"}
+    meta = _read_cscan_sidecar(stem, CSCAN_RAW_DIR)
+    boxes = [{"class_id": c, "cx": cx, "cy": cy, "w": w, "h": h}
+             for (c, cx, cy, w, h) in parse_yolo(os.path.join(CSCAN_RAW_DIR, stem + ".txt"))]
+    return {"stem": stem, "filename": os.path.basename(img), "ext": os.path.splitext(img)[1].lower(),
+            "meta": meta, "yolo": boxes, "has_txt": bool(boxes)}
+
+
+@app.post("/cscan/raw/save")
+async def cscan_raw_save(file: UploadFile = File(...),
+                         meta: str = Form("{}"),
+                         boxes: str = Form("[]")):
+    """把一张未处理原图入库：规范命名存 raw 三件套 + 自动切片更新 images/labels/meta。
+
+    multipart: file 原图；meta json(9 段字段 + probe_type/description/timestamp)；
+    boxes json: [{class_id,cx,cy,w,h}]（归一化坐标，空数组 = 背景/无缺陷）。"""
+    suffix = os.path.splitext(file.filename or "")[1].lower()
+    if suffix not in CSCAN_IMAGE_EXTS:
+        return {"error": f"仅支持图片: {sorted(CSCAN_IMAGE_EXTS)}"}
+    try:
+        m = json.loads(meta) if meta else {}
+    except Exception:
+        return {"error": "meta 不是合法 JSON"}
+    try:
+        box_list = json.loads(boxes) if boxes else []
+    except Exception:
+        return {"error": "boxes 不是合法 JSON"}
+
+    for d in (CSCAN_IMAGES_DIR, CSCAN_LABELS_DIR, CSCAN_META_DIR):
+        os.makedirs(d, exist_ok=True)
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    tmp.write(await file.read())
+    tmp.close()
+    try:
+        stem = normalize_stem(m, fallback_mtime=datetime.fromtimestamp(os.path.getmtime(tmp.name)))
+
+        # ① 原图 → raw/<stem><ext>（已存在则覆盖，即"编辑既有 raw"）
+        dst = os.path.join(CSCAN_RAW_DIR, stem + suffix)
+        shutil.copy2(tmp.name, dst)
+
+        # ② 边车 json（含中文 description）
+        with open(os.path.join(CSCAN_RAW_DIR, stem + ".json"), "w", encoding="utf-8") as f:
+            json.dump(m, f, ensure_ascii=False, indent=2)
+
+        # ③ 标注 → raw/<stem>.txt（YOLO 归一化行；空数组=背景图，写空文件标记已处理）
+        lines = []
+        for b in box_list:
+            lines.append(f"{int(b['class_id'])} {float(b['cx']):.6f} {float(b['cy']):.6f} "
+                         f"{float(b['w']):.6f} {float(b['h']):.6f}")
+        with open(os.path.join(CSCAN_RAW_DIR, stem + ".txt"), "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + ("\n" if lines else ""))
+
+        # ④ 自动切片（幂等清旧 tile）
+        slice_res = slice_raw_image(stem, m, CSCAN_RAW_DIR,
+                                    CSCAN_IMAGES_DIR, CSCAN_LABELS_DIR, CSCAN_META_DIR,
+                                    read_classes(CSCAN_CLASSES_TXT))
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+    return {"ok": True, "stem": stem, "filename": stem + suffix, "slice": slice_res}
+
+
+# endregion
+
+
+# ══════════════════════════════════════════════════
 # 4.模型训练 API
 # ══════════════════════════════════════════════════
 # region 模型训练API
@@ -1115,6 +1418,24 @@ async def chat_ask(req: dict):
     if acceptance_ctx:
         system_prompt += acceptance_ctx
 
+    # C-Scan 上下文（CScan 面板"发送给AI评估"带入；关键词命中时注入结果块）
+    cscan_context = req.get("cscan_context")
+    cscan_keywords = ['C扫', 'cscan', 'C扫描', 'C-Scan', 'C图', 'C 扫', 'C扫图']
+    if any(k in question for k in cscan_keywords):
+        if cscan_context:
+            system_prompt += build_cscan_block(cscan_context)
+            acc = cscan_context.get("acceptance")
+            if acc and acc.get("passed") is not None and "error" not in acc:
+                try:
+                    system_prompt += build_acceptance_result_block(
+                        acc, cscan_context.get("authoritative_defect_type") or "")
+                except Exception:
+                    pass
+        else:
+            system_prompt += ("\n\n用户询问 C-Scan 相关内容，但当前没有 C-Scan 检测上下文。"
+                              "可引导用户在『数据标注』模块上传 C 扫图完成标注入库；"
+                              "图像自动识别与送AI评估能力后续开放，暂以知识性解答为主。")
+
     # 争议项查询（对话式）
     dispute_keywords = ['争议', '争议项', '待仲裁', 'DSP']
     asks_dispute = any(k in question for k in dispute_keywords)
@@ -1319,6 +1640,7 @@ def acceptance_check(req: dict):
             "confidence": req.get("confidence", 0),
             "signal_features": signal_features,
             "prediction": req.get("prediction", {}),
+            "grade": req.get("grade") or None,   # CScan 重判时可带质量控制等级
         }
 
         checker = get_checker()
@@ -1440,3 +1762,118 @@ async def dispatch_upload(file: UploadFile = File(...)):
 # endregion
 
 
+
+
+# ══════════════════════════════════════════════════
+# CScan YOLO 训练 / 验证评估 API（仿 AScan 训练/测试）
+# ══════════════════════════════════════════════════
+# region CScan Train / Eval
+
+def _count_lines(path):
+    if not os.path.isfile(path):
+        return 0
+    n = 0
+    with open(path, encoding="utf-8") as f:
+        for _ in f:
+            n += 1
+    return n
+
+
+@app.get("/cscan/train/preview")
+def cscan_train_preview():
+    """CScan YOLO 训练预览：tile 规模/类别/预训练/已收编模型/ultralytics 可用。"""
+    try:
+        return {
+            "available": ultralytics_available(),
+            "classes": _cscan_class_list(),
+            "n_train": _count_lines(os.path.join(CSCAN_DATASET_DIR, "train.txt")),
+            "n_val": _count_lines(os.path.join(CSCAN_DATASET_DIR, "val.txt")),
+            "n_images": len([f for f in os.listdir(CSCAN_IMAGES_DIR) if f.endswith(".png")])
+                         if os.path.isdir(CSCAN_IMAGES_DIR) else 0,
+            "pretrained": [p for p in CSCAN_PRETRAINED
+                           if os.path.isfile(os.path.join(CSCAN_DATASET_DIR, p))],
+            "models": list_cscan_model_meta(),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/cscan/train/start")
+def cscan_train_start(req: dict):
+    """启动 CScan YOLO 训练（epochs/imgsz/batch/patience/seed/device/base）。"""
+    try:
+        job_id = start_cscan_train(req or {})
+        return {"job_id": job_id, "status": "pending"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/cscan/train/status/{job_id}")
+def cscan_train_status(job_id: str):
+    return get_cscan_train_status(job_id)
+
+
+@app.get("/cscan/train/result/{job_id}")
+def cscan_train_result(job_id: str):
+    res = get_cscan_train_result(job_id)
+    if res is None:
+        return {"error": "result not available yet"}
+    return res
+
+
+@app.get("/cscan/train/models")
+def cscan_train_models():
+    return {"models": list_cscan_model_meta()}
+
+
+@app.delete("/cscan/train/models/{model_name}")
+def cscan_train_delete_model(model_name: str):
+    """删除 backend/cscan_models 下模型（.pt + .json）。"""
+    name = os.path.basename(model_name)
+    stem = os.path.splitext(name)[0]
+    removed = []
+    for ext in (".pt", ".json"):
+        p = os.path.join(CSCAN_MODELS_DIR_T, stem + ext)
+        if os.path.isfile(p):
+            os.remove(p)
+            removed.append(ext)
+    return {"success": True, "removed": removed}
+
+
+@app.get("/cscan/train/file")
+def cscan_train_file(run: str, name: str):
+    """服务 runs/<run>/ 下的训练/评估产物图与 csv（防穿越）。"""
+    if os.path.basename(run) != run or os.path.basename(name) != name:
+        return {"error": "invalid name"}
+    base = os.path.realpath(os.path.join(RUNS_DIR, run))
+    if not base.startswith(os.path.realpath(RUNS_DIR) + os.sep) or not os.path.isdir(base):
+        return {"error": "run 不存在"}
+    p = os.path.join(base, name)
+    if not os.path.isfile(p):
+        return {"error": "file 不存在"}
+    return FileResponse(p)
+
+
+@app.post("/cscan/test/start")
+def cscan_test_start(req: dict):
+    """对选定 CScan 模型在验证集上跑 ultralytics val。"""
+    try:
+        job_id = start_cscan_eval(req or {})
+        return {"job_id": job_id, "status": "pending"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/cscan/test/status/{job_id}")
+def cscan_test_status(job_id: str):
+    return get_cscan_eval_status(job_id)
+
+
+@app.get("/cscan/test/result/{job_id}")
+def cscan_test_result(job_id: str):
+    res = get_cscan_eval_result(job_id)
+    if res is None:
+        return {"error": "result not available yet"}
+    return res
+
+# endregion
