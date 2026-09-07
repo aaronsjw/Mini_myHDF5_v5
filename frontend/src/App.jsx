@@ -10,6 +10,11 @@ import DatabaseOverview from './components/DatabaseOverview'
 import TrainingPanel from './components/TrainingPanel'
 import TestingPanel from './components/TestingPanel'
 import EvaluationPanel from './components/EvaluationPanel'
+import CScanLabeler from './components/CScanLabeler'
+import DatasetTree from './components/DatasetTree'
+import CScanTrainPanel from './components/CScanTrainPanel'
+import CScanTestPanel from './components/CScanTestPanel'
+import { RUNNABLE_ASCAN, CSCAN_DATASET, findDataset } from './datasets'
 import Structure3DViewer from './components/Structure3DViewer'
 
 import {
@@ -62,6 +67,20 @@ export default function App() {
     const [frameLabels, setFrameLabels] = useState(null)            // 每帧的标注类别
     const [yAxisRange, setYAxisRange] = useState([-100, 100])
     const [datasetPath, setDatasetPath] = useState('')              // 数据库子目录路径
+    const [imageSession, setImageSession] = useState(null)          // 上传 CScan 原图 → 标注会话 {file,name}
+    const [trainPath, setTrainPath] = useState(RUNNABLE_ASCAN)      // 模型训练选中的数据集
+    const [testPath, setTestPath] = useState(RUNNABLE_ASCAN)        // 模型测试选中的数据集
+
+    // 数据库 分组展开状态（每组箭头可点开/折叠，独立）
+    const [dbOpen, setDbOpen] = useState({
+        ultrasonic: true, radiography: false, optical: false, electromagnetic: false,
+    })
+    const toggleDbGroup = (g) => setDbOpen(p => ({ ...p, [g]: !p[g] }))
+    useEffect(() => {
+        if (!datasetPath) return
+        const g = datasetPath.split('/')[0]
+        setDbOpen(p => (p[g] ? p : { ...p, [g]: true }))
+    }, [datasetPath])
 
     const heatmapHeight = heatmap
         ? Math.max(300, Math.min(heatmap.length * 6, 800))
@@ -81,6 +100,14 @@ export default function App() {
         setTreeData([])
         setCurrentFile(file.name)
         setFrameLabels(null)
+        setImageSession(null)
+
+        // CScan 原图（bmp/png/jpg/jpeg）→ 进入标注入库界面，不做 .nde 树解析
+        const _ext = (file.name.split('.').pop() || '').toLowerCase()
+        if (['bmp', 'png', 'jpg', 'jpeg'].includes(_ext)) {
+            setImageSession({ file, name: file.name })
+            return false
+        }
 
         // 2.用FormData包装文件，发送POST请求
         const form = new FormData()
@@ -277,7 +304,7 @@ export default function App() {
                                             {/* Upload */}
                                             <div style={{ marginBottom: 6 }}>
                                                 <Upload
-                                                    accept=".nde, .h5, .hdf5, .csv, .zip"
+                                                    accept=".nde, .h5, .hdf5, .csv, .zip, .bmp, .png, .jpg, .jpeg"
                                                     beforeUpload={uploadFile}
                                                     showUploadList={false}
                                                     style={{ display: 'block' }}
@@ -357,16 +384,16 @@ export default function App() {
                                             {/* 超声检测 */}
                                             <div style={{ marginBottom: 4 }}>
                                                 <div
-                                                    onClick={() => { setActiveModule('dataset'); setDatasetPath('ultrasonic/ascan') }}
+                                                    onClick={() => toggleDbGroup('ultrasonic')}
                                                     style={{
                                                         padding: '6px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 'bold',
-                                                        color: datasetPath.startsWith('ultrasonic') ? '#1890ff' : '#ccc',
-                                                        borderRadius: 4,
+                                                        color: dbOpen.ultrasonic ? '#1890ff' : '#ccc',
+                                                        borderRadius: 4, userSelect: 'none',
                                                     }}
                                                 >
-                                                    {datasetPath.startsWith('ultrasonic') ? '▾' : '▸'} 超声检测
+                                                    <span style={{ display: 'inline-block', width: 14 }}>{dbOpen.ultrasonic ? '▾' : '▸'}</span>超声检测
                                                 </div>
-                                                {datasetPath.startsWith('ultrasonic') && (
+                                                {dbOpen.ultrasonic && (
                                                     <div style={{ paddingLeft: 24 }}>
                                                         <div
                                                             onClick={() => { setActiveModule('dataset'); setDatasetPath('ultrasonic/ascan') }}
@@ -429,16 +456,16 @@ export default function App() {
                                             {/* 射线检测 */}
                                             <div style={{ marginBottom: 4 }}>
                                                 <div
-                                                    onClick={() => { setActiveModule('dataset'); setDatasetPath('radiography/dr') }}
+                                                    onClick={() => toggleDbGroup('radiography')}
                                                     style={{
                                                         padding: '6px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 'bold',
-                                                        color: datasetPath.startsWith('radiography') ? '#1890ff' : '#ccc',
-                                                        borderRadius: 4,
+                                                        color: dbOpen.radiography ? '#1890ff' : '#ccc',
+                                                        borderRadius: 4, userSelect: 'none',
                                                     }}
                                                 >
-                                                    {datasetPath.startsWith('radiography') ? '▾' : '▸'} 射线检测
+                                                    <span style={{ display: 'inline-block', width: 14 }}>{dbOpen.radiography ? '▾' : '▸'}</span>射线检测
                                                 </div>
-                                                {datasetPath.startsWith('radiography') && (
+                                                {dbOpen.radiography && (
                                                     <div style={{ paddingLeft: 24 }}>
                                                         <div
                                                             onClick={() => { setActiveModule('dataset'); setDatasetPath('radiography/dr') }}
@@ -479,16 +506,16 @@ export default function App() {
                                             {/* 光学检测 */}
                                             <div style={{ marginBottom: 4 }}>
                                                 <div
-                                                    onClick={() => { setActiveModule('dataset'); setDatasetPath('optical/vt') }}
+                                                    onClick={() => toggleDbGroup('optical')}
                                                     style={{
                                                         padding: '6px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 'bold',
-                                                        color: datasetPath.startsWith('optical') ? '#1890ff' : '#ccc',
-                                                        borderRadius: 4,
+                                                        color: dbOpen.optical ? '#1890ff' : '#ccc',
+                                                        borderRadius: 4, userSelect: 'none',
                                                     }}
                                                 >
-                                                    {datasetPath.startsWith('optical') ? '▾' : '▸'} 光学检测
+                                                    <span style={{ display: 'inline-block', width: 14 }}>{dbOpen.optical ? '▾' : '▸'}</span>光学检测
                                                 </div>
-                                                {datasetPath.startsWith('optical') && (
+                                                {dbOpen.optical && (
                                                     <div style={{ paddingLeft: 24 }}>
                                                         <div
                                                             onClick={() => { setActiveModule('dataset'); setDatasetPath('optical/vt') }}
@@ -529,16 +556,16 @@ export default function App() {
                                             {/* 电磁检测 */}
                                             <div style={{ marginBottom: 4 }}>
                                                 <div
-                                                    onClick={() => { setActiveModule('dataset'); setDatasetPath('electromagnetic/et') }}
+                                                    onClick={() => toggleDbGroup('electromagnetic')}
                                                     style={{
                                                         padding: '6px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 'bold',
-                                                        color: datasetPath.startsWith('electromagnetic') ? '#1890ff' : '#ccc',
-                                                        borderRadius: 4,
+                                                        color: dbOpen.electromagnetic ? '#1890ff' : '#ccc',
+                                                        borderRadius: 4, userSelect: 'none',
                                                     }}
                                                 >
-                                                    {datasetPath.startsWith('electromagnetic') ? '▾' : '▸'} 电磁检测
+                                                    <span style={{ display: 'inline-block', width: 14 }}>{dbOpen.electromagnetic ? '▾' : '▸'}</span>电磁检测
                                                 </div>
-                                                {datasetPath.startsWith('electromagnetic') && (
+                                                {dbOpen.electromagnetic && (
                                                     <div style={{ paddingLeft: 24 }}>
                                                         <div
                                                             onClick={() => { setActiveModule('dataset'); setDatasetPath('electromagnetic/et') }}
@@ -557,23 +584,25 @@ export default function App() {
                                         </div>
                                     )
                                 },
-                                // 模型训练面板
+                                // 模型训练面板（子导航：选数据集）
                                 {
                                     key: 'model',
                                     label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>模型训练</span>,
                                     children: (
-                                        <div style={{ padding: '6px 12px', color: '#666', fontSize: 13, background: '#666', borderRadius: 6 }}>
-                                            (Coming soon)
+                                        <div style={{ background: '#666', borderRadius: 6, padding: '4px 0' }}>
+                                            <DatasetTree value={trainPath}
+                                                onChange={(v) => { setTrainPath(v); setActiveModule('model') }} />
                                         </div>
                                     )
                                 },
-                                // 模型测试面板
+                                // 模型测试面板（子导航：选数据集）
                                 {
                                     key: 'test',
                                     label: <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>模型测试</span>,
                                     children: (
-                                        <div style={{ padding: '6px 12px', color: '#999', fontSize: 12, background: '#666', borderRadius: 6 }}>
-                                            在测试数据集上评估模型
+                                        <div style={{ background: '#666', borderRadius: 6, padding: '4px 0' }}>
+                                            <DatasetTree value={testPath}
+                                                onChange={(v) => { setTestPath(v); setActiveModule('test') }} />
                                         </div>
                                     )
                                 },
@@ -611,7 +640,16 @@ export default function App() {
             <Content style={{ padding: 20, overflow: 'hidden', background: '#f5f5f5', position: 'relative' }}>
                 {/* 模型训练 TrainingPanel ****************/}
                 <div style={{ height: '100%', overflow: 'auto', display: activeModule === 'model' ? 'block' : 'none' }}>
-                    <TrainingPanel active={activeModule === 'model'} />
+                    {(() => {
+                        if (trainPath === CSCAN_DATASET) return <CScanTrainPanel active={activeModule === 'model'} />
+                        if (trainPath === RUNNABLE_ASCAN) return <TrainingPanel active={activeModule === 'model'} />
+                        const leaf = findDataset(trainPath)
+                        return (
+                            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#999', fontSize: 16 }}>
+                                {(leaf?.label?.split('（')[0] || trainPath)} · 训练界面暂空（待接入）
+                            </div>
+                        )
+                    })()}
                 </div>
                 {/* 数据库预览 DatabaseOverview ****************/}
                 <div style={{ height: '100%', overflow: 'auto', display: activeModule === 'dataset' ? 'block' : 'none' }}>
@@ -651,14 +689,27 @@ export default function App() {
                 </div>
                 {/* 模型测试 TestingPanel ****************/}
                 <div style={{ height: '100%', overflow: 'auto', display: activeModule === 'test' ? 'block' : 'none' }}>
-                    <TestingPanel active={activeModule === 'test'} />
+                    {(() => {
+                        if (testPath === CSCAN_DATASET) return <CScanTestPanel active={activeModule === 'test'} />
+                        if (testPath === RUNNABLE_ASCAN) return <TestingPanel active={activeModule === 'test'} />
+                        const leaf = findDataset(testPath)
+                        return (
+                            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#999', fontSize: 16 }}>
+                                {(leaf?.label?.split('（')[0] || testPath)} · 测试界面暂空（待接入）
+                            </div>
+                        )
+                    })()}
                 </div>
                 {/* 智能评估 EvaluationPanel ****************/}
                 <div style={{ height: '100%', display: activeModule === 'analysis' ? 'block' : 'none' }}>
                     <EvaluationPanel />
                 </div>
-                {/* 数据标注 ****************/}
-                <div style={{ height: '100%', display: activeModule === 'labeling' ? 'block' : 'none' }}>
+                {/* CScan 标注入库（上传图片时进入） ****************/}
+                <div style={{ height: '100%', overflow: 'auto', display: (activeModule === 'labeling' && imageSession) ? 'block' : 'none' }}>
+                    <CScanLabeler initial={imageSession} onExit={() => setImageSession(null)} />
+                </div>
+                {/* 数据标注(.nde/.csv/.zip 检视标注) ****************/}
+                <div style={{ height: '100%', display: (activeModule === 'labeling' && !imageSession) ? 'block' : 'none' }}>
                     {info && (
                         <Tabs
                             activeKey={activeViewTab}

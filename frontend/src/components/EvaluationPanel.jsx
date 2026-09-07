@@ -37,7 +37,7 @@ const markdownComponents = {
     ),
 }
 
-export default function EvaluationPanel() {
+export default function EvaluationPanel({ cscanContext = null, prefill = '' }) {
     const [models, setModels] = useState([])
     const [selectedModel, setSelectedModel] = useState(null)
     const [aiMode, setAiMode] = useState('cloud')  // 'cloud' | 'local'
@@ -66,6 +66,15 @@ export default function EvaluationPanel() {
     const msgEndRef = useRef(null)
     const inputRef = useRef(null)
     const abortRef = useRef(null)
+
+    // CScan 面板切过来时的预填问题：自动填入输入框并聚焦
+    useEffect(() => {
+        if (prefill && !inputText) {
+            setInputText(prefill)
+            setTimeout(() => inputRef.current?.focus(), 100)
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [prefill])
 
     // 拖拽上传状态
     const [dragOver, setDragOver] = useState(false)
@@ -258,6 +267,7 @@ export default function EvaluationPanel() {
                     history: chatHistory,
                     model_name: selectedModel || '',
                     ai_mode: aiMode,
+                    ...(cscanContext ? { cscan_context: cscanContext } : {}),
                 }),
             })
 
@@ -624,6 +634,9 @@ export default function EvaluationPanel() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                     <RobotOutlined style={{ fontSize: 22, color: '#52c41a' }} />
                     <span style={{ fontSize: 16, fontWeight: 'bold' }}>复合材料智能评估</span>
+                    {cscanContext && (
+                        <Tag color="geekblue" style={{ marginLeft: 4 }}>📎 C扫上下文已接入</Tag>
+                    )}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <Segmented
