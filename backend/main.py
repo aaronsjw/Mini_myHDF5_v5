@@ -1877,3 +1877,105 @@ def cscan_test_result(job_id: str):
     return res
 
 # endregion
+
+
+# ══════════════════════════════════════════════════
+# CScan 元数据智能解析（一段文字 → 自动提取关键词填字段）
+# ══════════════════════════════════════════════════
+# region CScan Meta Parse
+
+_CSCAN_ZH = {
+    "defectType": {"分层": "Dl", "脱粘": "Db", "孔隙": "Po", "气孔": "Vo",
+                   "夹杂": "In", "富树脂": "Rs", "纤维相关": "Fb", "胶膜孔隙": "Ap",
+                   "耦合不良": "Cp", "无缺陷": "OK", "好区": "OK"},
+    "fiber": {"碳纤维": "CF", "碳纤": "CF", "玻璃纤维": "GF", "玻纤": "GF",
+              "芳纶": "AF", "硼纤维": "BF"},
+    "matrix": {"环氧": "EP", "双马来酰亚胺": "BMI", "双马": "BMI",
+               "聚酰亚胺": "PI", "热塑性": "TP", "热塑": "TP", "碳化硅": "SiC"},
+    "structure": {"板板胶接": "BondPP", "板芯胶接": "BondSC", "变厚度": "Taper", "变厚": "Taper",
+                  "平板": "Plate", "蜂窝": "BondSC", "板-板": "BondPP", "板-芯": "BondSC",
+                  "板板": "BondPP", "板芯": "BondSC"},
+    "method": {"喷水穿透": "WPUT", "空耦穿透": "AUT", "水穿透": "WPUT", "穿透": "WPUT",
+               "相控阵": "PAUT", "空耦": "AUT", "水浸": "WRUT", "水膜": "WRUT",
+               "水耦合": "WRUT", "反射": "WRUT"},
+}
+
+
+def _cscan_vocab():
+    """从 raw 已有边车统计各字段出现过值，用于任意文本的令牌匹配。"""
+    keys = ("fiber", "matrix", "structure", "method", "code", "fiberGrade", "matrixGrade")
+    vocab = {k: set() for k in keys}
+    if os.path.isdir(CSCAN_RAW_DIR):
+        for fn in os.listdir(CSCAN_RAW_DIR):
+            if os.path.splitext(fn)[1].lower() not in CSCAN_IMAGE_EXTS:
+                continue
+            m = _read_cscan_sidecar(os.path.splitext(fn)[0], CSCAN_RAW_DIR)
+            for k in keys:
+                v = m.get(k)
+                if v and v != "NaN":
+                    vocab[k].add(str(v))
+    return vocab
+
+
+def _pick_zh(text: str, table: dict):
+    """按别名长度降序在文本里找中文关键词 → 规范码。"""
+    for alias, code in sorted(table.items(), key=lambda kv: -len(kv[0])):
+        if alias in text:
+            return code
+    return ""
+
+
+@app.post("/cscan/meta/parse")
+def cscan_meta_parse(req: dict):
+    """把一段文字（文件名/描述/关键词混排，格式不定）解析成 9 段元数据 + 时间戳 + 描述。
+    优先整段匹配规范文件名(9 段)，否则用中文别名 + raw 已有值词典做令牌扫描。"""
+    try:
+        text = str(req.get("text", "")).strip()
+        if not text:
+            return {"error": "text 不能为空"}
+        out = {"fiber": "", "matrix": "", "structure": "", "method": "",
+               "defectType": "", "code": "", "fiberGrade": "", "matrixGrade": "",
+               "timestamp": "", "probe_type": "", "description": text}
+
+        # ① 规范文件名（9 段下划线）整段匹配
+        m = _CSCAN_PATTERN.search(text)
+        if m:
+            g = m.groups()  # fiber,matrix,structure,method,defect,code,ts,extra
+            for key, val in zip(("fiber", "matrix", "structure", "method",
+                                 "defectType", "code", "timestamp"), g[:7]):
+                if val and val != "NaN":
+                    out[key] = val
+            extra = (g[7] or "")
+            parts = extra.split("_")
+            if len(parts) >= 2:
+                if parts[-2] and parts[-2] != "NaN": out["fiberGrade"] = parts[-2]
+                if parts[-1] and parts[-1] != "NaN": out["matrixGrade"] = parts[-1]
+            elif parts and parts[0] and parts[0] != "NaN":
+                out["fiberGrade"] = parts[0]
+
+        # ② 中文别名扫描（补齐上面没填的）
+        for key, table in _CSCAN_ZH.items():
+            if not out.get(key):
+                out[key] = _pick_zh(text, table)
+
+        # ③ raw 已有值词典扫描（型号/牌号/材料等已知值；避免误匹配太短令牌）
+        vocab = _cscan_vocab()
+        for key, values in vocab.items():
+            if out.get(key):
+                continue
+            for val in sorted(values, key=len, reverse=True):
+                if len(val) >= 2 and val in text:
+                    out[key] = val
+                    break
+
+        # ④ 时间戳兜底
+        if not out.get("timestamp"):
+            ts = re.search(r"\d{14}", text)
+            if ts:
+                out["timestamp"] = ts.group()
+
+        return {"meta": out}
+    except Exception as e:
+        return {"error": str(e)}
+
+# endregion

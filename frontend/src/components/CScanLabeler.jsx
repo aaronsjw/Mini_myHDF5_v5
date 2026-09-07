@@ -3,12 +3,12 @@
 //       ③ 保存入库(raw 三件套 + 后台自动切片 images/labels/meta)
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import {
-    Card, Button, Upload, Select, Input, Tag, message,
+    Card, Button, Select, Input, Tag, message, Collapse,
     Row, Col, Space, Divider, Spin, Modal,
 } from 'antd'
 import {
-    PlusOutlined, DeleteOutlined, UndoOutlined, SaveOutlined,
-    ZoomInOutlined, ZoomOutOutlined, AimOutlined, PictureOutlined,
+    DeleteOutlined, UndoOutlined, SaveOutlined,
+    ZoomInOutlined, ZoomOutOutlined, AimOutlined, PictureOutlined, ThunderboltOutlined,
 } from '@ant-design/icons'
 import axios from 'axios'
 
@@ -21,13 +21,11 @@ const MIN_NORM = 0.002  // 归一化最小宽高，小于则丢弃
 const clean = v => (String(v ?? '').trim().replace(/[/\\\s_]+/g, '-') || 'NaN')
 const pad2 = n => String(n).padStart(2, '0')
 const fileStamp = d => `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`
-const stemFromName = name => (name || '').replace(/\.(bmp|png|jpe?g)$/i, '')
-const tsFromStem = stem => (stem.match(/(\d{14})/) || [])[1] || ''
 
 let UID = 1
 const nid = () => UID++
 
-export default function CScanLabeler({ initial = null, onExit }) {
+export default function CScanLabeler({ initial = null }) {
     const [classList, setClassList] = useState([])       // [{id, code, zh}]
     const [currentClassId, setCurrentClassId] = useState(0)
     const [files, setFiles] = useState([])               // [{name, file, url, fromRaw}]
@@ -40,6 +38,8 @@ export default function CScanLabeler({ initial = null, onExit }) {
         fiberGrade: '', matrixGrade: '', timestamp: '', probe_type: '', description: '',
     })
     const [defectType, setDefectType] = useState('Dl')   // 整图标签(code)
+    const [parseText, setParseText] = useState('')        // 智能解析输入文字
+    const [parsing, setParsing] = useState(false)
     const [imgSize, setImgSize] = useState(null)
 
     const [boxes, setBoxes] = useState([])               // {uid,class_id,x1,y1,x2,y2} 归一化
@@ -93,51 +93,8 @@ export default function CScanLabeler({ initial = null, onExit }) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [initial])
 
-    const addLocalFiles = (entries) => {
-        setFiles(prev => {
-            const list = entries.map(e => ({
-                name: e.name, file: e.file,
-                url: e.url || URL.createObjectURL(e.file), fromRaw: false,
-            }))
-            const next = [...prev, ...list]
-            if (prev.length === 0) setIdx(0)
-            return next
-        })
-    }
-
     // 切图：重置框
     useEffect(() => { setBoxes([]); setSelected(-1) }, [fileUrl])
-
-    // 打开已有 raw 图：载入边车 + 框 + 原图
-    const openRawItem = async (name) => {
-        const stem = stemFromName(name)
-        if (!stem) return
-        try {
-            const item = (await axios.get(`${API}/cscan/raw/item?stem=${encodeURIComponent(stem)}`)).data
-            if (item.error) { message.error(item.error); return }
-            const blob = (await axios.get(`${API}/cscan/image?name=${encodeURIComponent(item.filename)}`, { responseType: 'blob' })).data
-            const f = new File([blob], item.filename, { type: blob.type || 'image/png' })
-            const url = URL.createObjectURL(f)
-            const m = item.meta || {}
-            setMeta({
-                fiber: m.fiber || '', matrix: m.matrix || '', structure: m.structure || '',
-                method: m.method || '', code: m.code || '', fiberGrade: m.fiberGrade || '',
-                matrixGrade: m.matrixGrade || '', timestamp: tsFromStem(stem) || '',
-                probe_type: m.probe_type || '', description: m.description || '',
-            })
-            setDefectType(m.defectType || (item.yolo?.length ? (classList.find(c => c.id === item.yolo[0].class_id)?.code || '') : 'OK'))
-            setBoxes((item.yolo || []).map(y => ({
-                uid: nid(), class_id: y.class_id,
-                x1: y.cx - y.w / 2, y1: y.cy - y.h / 2, x2: y.cx + y.w / 2, y2: y.cy + y.h / 2,
-            })))
-            setFiles(prev => {
-                const cleanPrev = prev.filter(p => p.name !== item.filename)
-                const next = [...cleanPrev, { name: item.filename, file: f, url, fromRaw: true }]
-                setIdx(next.length - 1)
-                return next
-            })
-        } catch (e) { message.error('打开 raw 图失败') }
-    }
 
     // 布局换算
     const layout = () => {
@@ -287,14 +244,6 @@ export default function CScanLabeler({ initial = null, onExit }) {
         setBoxes(prev => prev.filter((_, i) => i !== selected))
         setSelected(-1)
     }
-    const removeCurrent = () => {
-        if (!cur) return
-        const next = files.filter((_, i) => i !== idx)
-        setFiles(next)
-        if (next.length) setIdx(Math.min(idx, next.length - 1))
-        else setIdx(0)
-    }
-
     // 预览规范化文件名
     const previewStem = [
         clean(meta.fiber), clean(meta.matrix), clean(meta.structure), clean(meta.method),
@@ -335,7 +284,6 @@ export default function CScanLabeler({ initial = null, onExit }) {
             const res = await axios.post(`${API}/cscan/raw/save`, fd)
             if (res.data.error) { message.error(res.data.error); return }
             message.success(`已入库 ${res.data.filename}（切片 ${res.data.slice.tiles}：正${res.data.slice.pos}/背景${res.data.slice.neg}）`)
-            if (idx < files.length - 1 && !cur.fromRaw) setIdx(idx + 1)
         } catch (e) {
             message.error(`保存失败: ${e?.response?.data?.error || e.message || ''}`)
         } finally { setSaving(false) }
@@ -355,7 +303,44 @@ export default function CScanLabeler({ initial = null, onExit }) {
     }
 
     const classOptions = classList.map(c => ({ value: c.id, label: `${c.code} - ${c.zh}` }))
-    const defectOptions = classList.map(c => ({ value: c.code, label: `${c.code} - ${c.zh}` }))
+    const defectOptions = [
+        ...classList.map(c => ({ value: c.code, label: `${c.code} - ${c.zh}` })),
+        ...(classList.some(c => c.code === 'OK') ? [] : [{ value: 'OK', label: 'OK - 好区/背景' }]),
+    ]
+
+    // 智能解析一段文字 → 自动填充元数据
+    const parseMeta = async () => {
+        const text = (parseText || '').trim()
+        if (!text) { message.warning('请先粘贴/输入一段文字'); return }
+        setParsing(true)
+        try {
+            const r = await axios.post(`${API}/cscan/meta/parse`, { text })
+            if (r.data?.error) { message.error(r.data.error); return }
+            const m = r.data.meta || {}
+            setMeta(prev => ({
+                ...prev,
+                fiber: m.fiber || prev.fiber,
+                matrix: m.matrix || prev.matrix,
+                structure: m.structure || prev.structure,
+                method: m.method || prev.method,
+                code: m.code || prev.code,
+                fiberGrade: m.fiberGrade || prev.fiberGrade,
+                matrixGrade: m.matrixGrade || prev.matrixGrade,
+                timestamp: m.timestamp || prev.timestamp,
+                probe_type: m.probe_type || prev.probe_type,
+                description: prev.description || text,
+            }))
+            if (m.defectType) setDefectType(m.defectType)
+            message.success('已智能解析并填充，展开“详细字段”可微调')
+        } catch (e) {
+            message.error('解析失败')
+        } finally {
+            setParsing(false)
+        }
+    }
+
+    const metaKeys = ['fiber', 'matrix', 'structure', 'method', 'code', 'fiberGrade', 'matrixGrade', 'probe_type']
+    const filledMetaN = metaKeys.filter(k => (meta[k] || '').trim()).length
     const selBox = selected >= 0 ? boxes[selected] : null
     const classSelValue = selBox ? selBox.class_id : currentClassId
 
@@ -364,49 +349,78 @@ export default function CScanLabeler({ initial = null, onExit }) {
             <Row gutter={12}>
                 {/* 左：元数据 + 入库 */}
                 <Col span={7}>
-                    <Card size="small" title={<Space><PictureOutlined />元数据 & 入库</Space>}
-                        extra={onExit ? <Button size="small" onClick={onExit}>退出图像模式</Button> : null}>
-                        <Space wrap style={{ marginBottom: 8 }}>
-                            <Upload accept=".bmp,.png,.jpg,.jpeg" multiple showUploadList={false}
-                                beforeUpload={(_, list) => { addLocalFiles(list.map(x => ({ file: x, name: x.name }))); return false }}>
-                                <Button size="small" icon={<PlusOutlined />}>打开本地图</Button>
-                            </Upload>
-                            <RawOpenDropdown onPick={openRawItem} />
-                        </Space>
-                        {cur && (
-                            <div style={{ fontSize: 12, color: '#666', marginBottom: 8 }}>
-                                第 {idx + 1}/{files.length} 张：<Tag color="blue" style={{ wordBreak: 'break-all' }}>{cur.name}</Tag>
-                                <div>
-                                    <Button size="small" type="link" disabled={idx <= 0} onClick={() => setIdx(idx - 1)}>上一张</Button>
-                                    <Button size="small" type="link" disabled={idx >= files.length - 1} onClick={() => setIdx(idx + 1)}>下一张</Button>
-                                    <Button size="small" type="link" onClick={removeCurrent}>移除当前</Button>
-                                </div>
-                            </div>
-                        )}
+                    <Card size="small" title={<Space><PictureOutlined />元数据 & 入库</Space>}>
+                        {/* 智能解析：一段文字 → 自动填充 */}
+                        <div style={{ marginBottom: 8 }}>
+                            <Input.TextArea rows={9} value={parseText}
+                                onChange={e => setParseText(e.target.value)}
+                                placeholder={'粘贴文件名/描述文字(格式不限)，自动提取关键词：\n例：CF_BMI_BondSC_WRUT_Db_SYJ_20200826103050_T700_QY9511\n例：超声C扫_反射_板芯脱粘_5件蜂窝，5MHz水浸，型号SYJ…'}
+                                style={{ fontSize: 12 }} />
+                            <Button size="small" type="primary" ghost loading={parsing} icon={<ThunderboltOutlined />}
+                                onClick={parseMeta} style={{ marginTop: 4 }}>
+                                智能解析并填充
+                            </Button>
+                        </div>
 
-                        <Space direction="vertical" style={{ width: '100%' }} size={5}>
-                            <MetaField label="纤维" v={meta.fiber} onChange={v => setMeta({ ...meta, fiber: v })} opts={['CF', 'GF', 'BF', 'AF']} />
-                            <MetaField label="基体" v={meta.matrix} onChange={v => setMeta({ ...meta, matrix: v })} opts={['EP', 'BMI', 'PI', 'TP', 'SiC']} />
-                            <MetaField label="结构" v={meta.structure} onChange={v => setMeta({ ...meta, structure: v })} opts={['Plate', 'Taper', 'BondPP', 'BondSC']} />
-                            <MetaField label="方法" v={meta.method} onChange={v => setMeta({ ...meta, method: v })} opts={['WRUT', 'WPUT', 'PAUT', 'AUT']} />
-                            <div>
-                                <div style={{ color: '#888', fontSize: 12, marginBottom: 2 }}>整图缺陷类型</div>
-                                <Space.Compact style={{ width: '100%' }}>
-                                    <Select size="small" style={{ flex: 1 }} showSearch optionFilterProp="label"
-                                        value={defectType} onChange={setDefectType} options={defectOptions} />
-                                    <Button size="small" onClick={() => setAddClassOpen(true)}>＋新类</Button>
-                                </Space.Compact>
-                            </div>
-                            <MetaField label="型号 code" v={meta.code} onChange={v => setMeta({ ...meta, code: v })} />
-                            <MetaField label="纤维牌号" v={meta.fiberGrade} onChange={v => setMeta({ ...meta, fiberGrade: v })} />
-                            <MetaField label="基体牌号" v={meta.matrixGrade} onChange={v => setMeta({ ...meta, matrixGrade: v })} />
-                            <MetaField label="时间戳(14位·留空自动)" v={meta.timestamp} onChange={v => setMeta({ ...meta, timestamp: v })} />
-                            <MetaField label="探头 probe_type" v={meta.probe_type} onChange={v => setMeta({ ...meta, probe_type: v })} />
-                            <Input size="small" placeholder="描述(损伤/增益/来源…)" value={meta.description}
-                                onChange={e => setMeta({ ...meta, description: e.target.value })} />
-                        </Space>
-
-                        <Divider style={{ margin: '8px 0' }} />
+                        <Divider style={{ margin: '4px 0 8px' }} />
+                        <Collapse ghost size="small"
+                            items={[{
+                                key: 'detail',
+                                label: <span style={{ fontSize: 13 }}>详细字段（可微调 · 已填 {filledMetaN}/{metaKeys.length}）</span>,
+                                children: (
+                                    <Space direction="vertical" style={{ width: '100%' }} size={5}>
+                                        {/* 行1 缺陷类型 */}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+                                            <div style={META_LABEL}>缺陷类型</div>
+                                            <Space.Compact style={{ flex: 1, minWidth: 0, width: '100%' }}>
+                                                <Select size="small" style={{ flex: 1, width: '50%' }} showSearch optionFilterProp="label"
+                                                    value={defectType} onChange={setDefectType} options={defectOptions} />
+                                                <Button size="small" style={{ flex: 1, width: '50%' }} onClick={() => setAddClassOpen(true)}>＋新类</Button>
+                                            </Space.Compact>
+                                        </div>
+                                        {/* 行2 纤维 + 基体 */}
+                                        <div style={{ display: 'flex', gap: 8, width: '100%' }}>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <MetaField label="纤维" labelWidth={64} v={meta.fiber} onChange={v => setMeta({ ...meta, fiber: v })} opts={['CF', 'GF', 'BF', 'AF']} />
+                                            </div>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <MetaField label="基体" labelWidth={64} v={meta.matrix} onChange={v => setMeta({ ...meta, matrix: v })} opts={['EP', 'BMI', 'PI', 'TP', 'SiC']} />
+                                            </div>
+                                        </div>
+                                        {/* 行3 纤维牌号 + 基体牌号 */}
+                                        <div style={{ display: 'flex', gap: 8, width: '100%' }}>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <MetaField label="纤维牌号" labelWidth={64} placeholder="如 T700" v={meta.fiberGrade} onChange={v => setMeta({ ...meta, fiberGrade: v })} />
+                                            </div>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <MetaField label="基体牌号" labelWidth={64} placeholder="如 QY9511" v={meta.matrixGrade} onChange={v => setMeta({ ...meta, matrixGrade: v })} />
+                                            </div>
+                                        </div>
+                                        {/* 行4 结构 + 方法 */}
+                                        <div style={{ display: 'flex', gap: 8, width: '100%' }}>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <MetaField label="结构" labelWidth={64} v={meta.structure} onChange={v => setMeta({ ...meta, structure: v })} opts={['Plate', 'Taper', 'BondPP', 'BondSC']} />
+                                            </div>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <MetaField label="方法" labelWidth={64} v={meta.method} onChange={v => setMeta({ ...meta, method: v })} opts={['WRUT', 'WPUT', 'PAUT', 'AUT']} />
+                                            </div>
+                                        </div>
+                                        {/* 行5 型号 + 探头 */}
+                                        <div style={{ display: 'flex', gap: 8, width: '100%' }}>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <MetaField label="型号" labelWidth={64} placeholder="如 SYJ" v={meta.code} onChange={v => setMeta({ ...meta, code: v })} />
+                                            </div>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <MetaField label="探头" labelWidth={64} placeholder="如 5MHz water immersion" v={meta.probe_type} onChange={v => setMeta({ ...meta, probe_type: v })} />
+                                            </div>
+                                        </div>
+                                        {/* 描述 */}
+                                        <Input size="small" placeholder="描述(损伤/增益/来源…)" value={meta.description}
+                                            onChange={e => setMeta({ ...meta, description: e.target.value })} />
+                                    </Space>
+                                ),
+                            }]} />
+                        <Divider style={{ margin: '4px 0 8px' }} />
                         <div style={{ fontSize: 12, color: '#888' }}>规范文件名预览（后端为准）</div>
                         <Tag color="geekblue" style={{ whiteSpace: 'normal', wordBreak: 'break-all', marginTop: 4 }}>{previewStem}.png</Tag>
                         <Button type="primary" block icon={<SaveOutlined />} loading={saving} onClick={save}
@@ -473,43 +487,25 @@ export default function CScanLabeler({ initial = null, onExit }) {
 }
 
 // 元数据字段：有选项用下拉(可选自定义另输入用自由选项需 allowClear + 仅已知)
-function MetaField({ label, v, onChange, opts = [], placeholder }) {
+const META_LABEL = {
+    color: '#888', fontSize: 12, width: 64, flexShrink: 0,
+    whiteSpace: 'nowrap', textAlign: 'right',
+}
+
+function MetaField({ label, v, onChange, opts = [], placeholder, labelWidth = 64 }) {
     const options = opts.length
         ? [...opts, ...(v && !opts.includes(v) ? [v] : [])].map(o => ({ value: o, label: o }))
         : []
     return (
-        <div>
-            <div style={{ color: '#888', fontSize: 12, marginBottom: 2 }}>{label}</div>
-            {opts.length
-                ? <Select size="small" style={{ width: '100%' }} showSearch allowClear placeholder={placeholder}
-                    value={v || undefined} options={options} onChange={onChange} optionFilterProp="label" />
-                : <Input size="small" value={v} placeholder={placeholder} onChange={e => onChange(e.target.value)} />}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+            <div style={{ ...META_LABEL, width: labelWidth }}>{label}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+                {opts.length
+                    ? <Select size="small" style={{ width: '100%' }} showSearch allowClear placeholder={placeholder}
+                        value={v || undefined} options={options} onChange={onChange} optionFilterProp="label" />
+                    : <Input size="small" style={{ width: '100%' }} value={v} placeholder={placeholder}
+                        onChange={e => onChange(e.target.value)} />}
+            </div>
         </div>
-    )
-}
-
-// 打开 raw 已有图（远端下拉，含当前文件名）
-function RawOpenDropdown({ onPick }) {
-    const [list, setList] = useState([])
-    const [loading, setLoading] = useState(false)
-    useEffect(() => {
-        setLoading(true)
-        axios.get(`${API}/cscan_dataset`).then(res => {
-            if (res.data?.files) setList(res.data.files.map(f => ({ value: f.filename, label: f.filename })))
-        }).catch(() => {}).finally(() => setLoading(false))
-    }, [])
-    const reload = () => {
-        setLoading(true)
-        axios.get(`${API}/cscan_dataset`).then(res => {
-            if (res.data?.files) setList(res.data.files.map(f => ({ value: f.filename, label: f.filename })))
-        }).catch(() => {}).finally(() => setLoading(false))
-    }
-    return (
-        <Select size="small" placeholder="打开 raw 已有图续标" loading={loading}
-            showSearch optionFilterProp="label" value={null} onChange={onPick}
-            onDropdownVisibleChange={open => { if (open) reload() }}
-            style={{ width: 196 }} options={list}
-            notFoundContent={list.length === 0 ? <div style={{ padding: 8, color: '#999' }}>暂无 raw 图（先保存入库）</div> : null}
-            popupMatchSelectWidth={false} />
     )
 }

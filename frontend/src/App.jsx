@@ -706,7 +706,7 @@ export default function App() {
                 </div>
                 {/* CScan 标注入库（上传图片时进入） ****************/}
                 <div style={{ height: '100%', overflow: 'auto', display: (activeModule === 'labeling' && imageSession) ? 'block' : 'none' }}>
-                    <CScanLabeler initial={imageSession} onExit={() => setImageSession(null)} />
+                    <CScanLabeler initial={imageSession} />
                 </div>
                 {/* 数据标注(.nde/.csv/.zip 检视标注) ****************/}
                 <div style={{ height: '100%', display: (activeModule === 'labeling' && !imageSession) ? 'block' : 'none' }}>
