@@ -661,6 +661,7 @@ export default function App() {
                                 dirLabel="CScan 数据目录"
                                 dirPath="dataset/cscan_dataset/raw"
                                 mergeMaterial
+                                manageBase="http://127.0.0.1:8000/cscan/raw"
                                 imageUrlFn={filename => `http://127.0.0.1:8000/cscan/image?name=${encodeURIComponent(filename)}`}
                                 extraColumns={[
                                     { title: '牌号', key: 'grade', width: 130, render: (_, r) => `${r.fiberGrade}/${r.matrixGrade}` },

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Table, Tag, Statistic, Row, Col, Spin, Tooltip } from 'antd'
+import { Card, Table, Tag, Statistic, Row, Col, Spin, Tooltip, Input, Select, Button, Space, Modal, message } from 'antd'
+import { SearchOutlined } from '@ant-design/icons'
 import axios from 'axios'
 
 // 命名规则中 缺陷类型 对应的中文
@@ -34,6 +35,15 @@ const FIELD_LABELS = {
     timestamp: '时间戳'
 }
 
+// 编辑表单的可选值
+const FIBER_OPTS = ['CF', 'GF', 'BF', 'AF']
+const MATRIX_OPTS = ['EP', 'BMI', 'PI', 'TP', 'SiC']
+const STRUCT_OPTS = ['Plate', 'Taper', 'BondPP', 'BondSC']
+const METHOD_OPTS = ['WRUT', 'WPUT', 'PAUT', 'AUT']
+const DEFECT_OPTS = Object.keys(DEFECT_LABELS).map(k => ({
+    value: k, label: `${k} · ${DEFECT_LABELS[k].text}`,
+}))
+
 export default function DatabaseOverview({
     endpoint = 'http://127.0.0.1:8000/dataset_overview',
     dirLabel = 'AScan 数据目录',
@@ -41,9 +51,82 @@ export default function DatabaseOverview({
     extraColumns = [],
     imageUrlFn = null,
     mergeMaterial = false,
+    manageBase = '',   // 如 'http://127.0.0.1:8000/cscan/raw'：非空时文件列表显示 编辑/删除
 }) {
     const [data, setData] = useState(null)
     const [loading, setLoading] = useState(true)
+    const [kw, setKw] = useState('')   // 文件列表搜索关键字（& = 且）
+    const [editOpen, setEditOpen] = useState(false)
+    const [editLoading, setEditLoading] = useState(false)
+    const [editBusy, setEditBusy] = useState(false)
+    const [editStem, setEditStem] = useState('')
+    const [editVals, setEditVals] = useState({})
+
+    const refresh = () => {
+        axios.get(endpoint).then(res => setData(res.data)).catch(err => console.error(err))
+    }
+
+    // 编辑：拉 /cscan/raw/item 的边车 meta 填充表单
+    const openEdit = (stem) => {
+        setEditStem(stem); setEditOpen(true); setEditLoading(true); setEditVals({})
+        axios.get(`${manageBase}/item`, { params: { stem } })
+            .then(r => {
+                const meta = r.data?.meta || {}
+                setEditVals({
+                    fiber: meta.fiber || '', matrix: meta.matrix || '',
+                    structure: meta.structure || '', method: meta.method || '',
+                    defectType: meta.defectType || '', code: meta.code || '',
+                    fiberGrade: meta.fiberGrade || '', matrixGrade: meta.matrixGrade || '',
+                    probe_type: meta.probe_type || '', description: meta.description || '',
+                    timestamp: meta.timestamp || '',
+                })
+            })
+            .catch(() => { message.error('读取该记录失败'); setEditOpen(false) })
+            .finally(() => setEditLoading(false))
+    }
+    const doEditSave = () => {
+        setEditBusy(true)
+        axios.put(`${manageBase}/${encodeURIComponent(editStem)}`, { meta: editVals })
+            .then(r => {
+                if (r.data?.error) { message.error(r.data.error); return }
+                setEditOpen(false)
+                message.success(`已更新 → ${r.data.filename}`)
+                refresh()
+            })
+            .catch(e => message.error('更新失败: ' + (e?.response?.data?.error || e.message)))
+            .finally(() => setEditBusy(false))
+    }
+    const doDelete = async (stem) => {
+        try {
+            const r = await axios.delete(`${manageBase}/${encodeURIComponent(stem)}`)
+            if (r.data?.error) { message.error(r.data.error); return }
+            message.success('已删除')
+            refresh()
+        } catch (e) {
+            message.error('删除失败: ' + (e?.response?.data?.error || e.message))
+        }
+    }
+    const askDelete = (stem, filename) => {
+        Modal.confirm({
+            title: '删除该条记录？',
+            content: <span>将移除原图/元数据/框，并删除派生切片、清理训练划分。<br /><b>{filename}</b></span>,
+            okText: '删除', okButtonProps: { danger: true }, cancelText: '取消',
+            onOk: () => doDelete(stem),
+        })
+    }
+
+    const editFields = [
+        { k: 'defectType', label: '缺陷类型', kind: 'select', opts: DEFECT_OPTS },
+        { k: 'structure', label: '结构', kind: 'select', opts: STRUCT_OPTS.map(v => ({ value: v, label: v })) },
+        { k: 'method', label: '方法', kind: 'select', opts: METHOD_OPTS.map(v => ({ value: v, label: v })) },
+        { k: 'code', label: '型号', kind: 'input' },
+        { k: 'fiber', label: '纤维', kind: 'select', opts: FIBER_OPTS.map(v => ({ value: v, label: v })) },
+        { k: 'matrix', label: '基体', kind: 'select', opts: MATRIX_OPTS.map(v => ({ value: v, label: v })) },
+        { k: 'fiberGrade', label: '纤维牌号', kind: 'input' },
+        { k: 'matrixGrade', label: '基体牌号', kind: 'input' },
+        { k: 'probe_type', label: '探头', kind: 'input' },
+        { k: 'timestamp', label: '时间戳(14位)', kind: 'input' },
+    ]
 
     useEffect(() => {
         axios.get(endpoint)
@@ -54,6 +137,13 @@ export default function DatabaseOverview({
 
     if (loading) return <Spin size="large" style={{ display: 'block', marginTop: 100 }} />
     if (!data || data.error) return <div style={{ padding: 40, color: '#999' }}>未找到 dataset 目录</div>
+
+    // 文件列表搜索：多个关键字用 & 连接 = 同时满足（不区分大小写，匹配任意字段）
+    const tokens = (kw || '').split('&').map(s => s.trim().toLowerCase()).filter(Boolean)
+    const visibleFiles = tokens.length === 0
+        ? data.files
+        : data.files.filter(f => tokens.every(t =>
+            Object.values(f).some(v => v != null && String(v).toLowerCase().includes(t))))
 
     // 按缺陷类型分组的列（Db 按结构拆分为 板板脱粘 / 板芯脱粘）
     const defectColumns = [
@@ -128,6 +218,18 @@ export default function DatabaseOverview({
         },
         { title: '型号', dataIndex: 'model', key: 'model', width: 80 },
         ...extraColumns,
+        ...(manageBase ? [{
+            title: '操作', key: 'ops', width: 120,
+            render: (_, r) => {
+                const stem = String(r.filename).replace(/\.[^.]+$/, '')
+                return (
+                    <Space size={4}>
+                        <Button size="small" onClick={() => openEdit(stem)}>编辑</Button>
+                        <Button size="small" danger onClick={() => askDelete(stem, r.filename)}>删除</Button>
+                    </Space>
+                )
+            },
+        }] : []),
     ]
 
     return (
@@ -173,14 +275,67 @@ export default function DatabaseOverview({
                 size="small"
                 style={{ flex: 1, overflow: 'auto' }}
                 bodyStyle={{ padding: 8 }}
+                extra={
+                    <Input
+                        allowClear
+                        prefix={<SearchOutlined style={{ color: '#999' }} />}
+                        placeholder="搜索（& 表示且），如 T1100&Plate"
+                        value={kw}
+                        onChange={e => setKw(e.target.value)}
+                        style={{ width: 280 }}
+                    />
+                }
             >
                 <Table
                     columns={fileColumns}
-                    dataSource={data.files.map((f, i) => ({ ...f, key: i }))}
+                    dataSource={visibleFiles.map((f, i) => ({ ...f, key: i }))}
                     size="small"
+                    locale={{ emptyText: tokens.length ? '无匹配条目' : '暂无数据' }}
                     pagination={{ pageSize: 5, showSizeChanger: true, showTotal: t => `共 ${t} 个文件`, pageSizeOptions: ['5', '10', '20', '50'] }}
                 />
             </Card>
+
+            {/* 编辑记录：元数据表单（命名字段改动会同步改名并重新切片） */}
+            <Modal
+                title={`编辑记录：${editStem}`}
+                open={editOpen}
+                onOk={doEditSave}
+                onCancel={() => setEditOpen(false)}
+                okText="保存" cancelText="取消"
+                confirmLoading={editBusy}
+                width={560}
+            >
+                <Spin spinning={editLoading}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12, rowGap: 6 }}>
+                        {editFields.map(f => {
+                            const val = (editVals[f.k] ?? '')
+                            let opts = f.opts
+                            if (f.k === 'defectType' && val && !DEFECT_LABELS[val]) {
+                                opts = [{ value: val, label: val }, ...(opts || [])]
+                            }
+                            return (
+                                <div key={f.k}>
+                                    <div style={{ fontSize: 12, color: '#888', marginBottom: 2 }}>{f.label}</div>
+                                    {f.kind === 'select'
+                                        ? <Select size="small" style={{ width: '100%' }} showSearch optionFilterProp="label"
+                                            value={val || undefined} options={opts}
+                                            onChange={v => setEditVals(p => ({ ...p, [f.k]: v }))} />
+                                        : <Input size="small" style={{ width: '100%' }} value={val}
+                                            onChange={e => setEditVals(p => ({ ...p, [f.k]: e.target.value }))} />}
+                                </div>
+                            )
+                        })}
+                        <div style={{ gridColumn: '1 / -1' }}>
+                            <div style={{ fontSize: 12, color: '#888', marginBottom: 2 }}>描述</div>
+                            <Input.TextArea rows={2} value={editVals.description || ''}
+                                onChange={e => setEditVals(p => ({ ...p, description: e.target.value }))} />
+                        </div>
+                        <div style={{ gridColumn: '1 / -1', color: '#aaa', fontSize: 12 }}>
+                            命名字段（缺陷/结构/方法/型号/纤维/基体/牌号）改动会同步改名并重新切片；时间戳留空沿用原名。
+                        </div>
+                    </div>
+                </Spin>
+            </Modal>
         </div>
     )
 }

@@ -1171,6 +1171,110 @@ async def cscan_raw_save(file: UploadFile = File(...),
     return {"ok": True, "stem": stem, "filename": stem + suffix, "slice": slice_res}
 
 
+# CScan raw 记录的命名/其它可编辑字段（PUT 时合并进旧 sidecar）
+_CSCAN_NAME_KEYS = ["fiber", "matrix", "structure", "method",
+                    "defectType", "code", "fiberGrade", "matrixGrade"]
+_CSCAN_OTHER_KEYS = ["probe_type", "description", "timestamp", "mm_per_px"]
+
+
+def _delete_cscan_raw(stem: str) -> bool:
+    """删除 raw/<stem>.*(原图+json+txt) + 派生切片 + train/val 里的引用。
+    返回是否找到了原图。"""
+    img = find_raw_image(CSCAN_RAW_DIR, stem)
+    found = img is not None
+    for sub in list(CSCAN_IMAGE_EXTS) + [".json", ".txt"]:
+        p = os.path.join(CSCAN_RAW_DIR, stem + sub)
+        if os.path.isfile(p):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    for d in (CSCAN_IMAGES_DIR, CSCAN_LABELS_DIR, CSCAN_META_DIR):
+        if os.path.isdir(d):
+            for fn in os.listdir(d):
+                if fn.startswith(stem + ".") or fn.startswith(stem + "_"):
+                    try:
+                        os.remove(os.path.join(d, fn))
+                    except OSError:
+                        pass
+    # 清理 train/val 中该 stem 的引用（行如 ./images/<stem>.png 或 ./images/<stem>_tNNN.png）
+    for split in ("train.txt", "val.txt"):
+        p = os.path.join(CSCAN_DATASET_DIR, split)
+        if not os.path.isfile(p):
+            continue
+        with open(p, encoding="utf-8") as f:
+            lines = f.readlines()
+        keep = []
+        for ln in lines:
+            name = ln.strip().replace("\\", "/").split("/")[-1]
+            if name.startswith(stem + ".") or name.startswith(stem + "_"):
+                continue
+            keep.append(ln)
+        if len(keep) != len(lines):
+            with open(p, "w", encoding="utf-8") as f:
+                f.writelines(keep)
+    return found
+
+
+@app.delete("/cscan/raw/{stem}")
+def cscan_raw_delete(stem: str):
+    """删除一条 raw 记录：原图+边车+框 + 派生切片 + train/val 引用。"""
+    if not stem or os.path.basename(stem) != stem:
+        return {"error": "invalid stem"}
+    if not _delete_cscan_raw(stem):
+        return {"error": "raw 图不存在"}
+    return {"ok": True}
+
+
+@app.put("/cscan/raw/{stem}")
+def cscan_raw_update(stem: str, req: dict):
+    """改 raw 元数据。命名字段变化会重算规范文件名 → 改名级联：
+    复制原图到新名 + 重写 json/txt + 重新切片 + 删除旧名那套 + 清理 train/val 旧引用。"""
+    if not stem or os.path.basename(stem) != stem:
+        return {"error": "invalid stem"}
+    img = find_raw_image(CSCAN_RAW_DIR, stem)
+    if not img:
+        return {"error": "raw 图不存在"}
+    ext = os.path.splitext(img)[1]
+    old = _read_cscan_sidecar(stem, CSCAN_RAW_DIR)
+    edits = req.get("meta") if isinstance(req.get("meta"), dict) else {}
+    m = dict(old)
+    for k in _CSCAN_NAME_KEYS + _CSCAN_OTHER_KEYS:
+        if k in edits and isinstance(edits[k], str):
+            v = edits[k].strip()
+            m[k] = v if (v or k not in _CSCAN_NAME_KEYS) else "NaN"  # 命名字段空→NaN；其它空→''
+    # 时间戳保持 14 位：没填/旧名 ts 时沿用旧文件名里的 ts，避免改名漂移
+    ts = str(m.get("timestamp") or "")
+    if not re.fullmatch(r"\d{14}", ts):
+        mt = re.search(r"(\d{14})", stem)
+        ts = mt.group(1) if mt else datetime.now().strftime("%Y%m%d%H%M%S")
+        m["timestamp"] = ts
+    for k in _CSCAN_NAME_KEYS:
+        if not (m.get(k) or "").strip():
+            m[k] = "NaN"
+    new_stem = normalize_stem(m)
+
+    for d in (CSCAN_IMAGES_DIR, CSCAN_LABELS_DIR, CSCAN_META_DIR):
+        os.makedirs(d, exist_ok=True)
+    dst = os.path.join(CSCAN_RAW_DIR, new_stem + ext)
+    shutil.copy2(img, dst)
+    with open(os.path.join(CSCAN_RAW_DIR, new_stem + ".json"), "w", encoding="utf-8") as f:
+        json.dump(m, f, ensure_ascii=False, indent=2)
+    src_txt = os.path.join(CSCAN_RAW_DIR, stem + ".txt")
+    dst_txt = os.path.join(CSCAN_RAW_DIR, new_stem + ".txt")
+    if os.path.isfile(src_txt):
+        shutil.copy2(src_txt, dst_txt)
+    else:
+        with open(dst_txt, "w", encoding="utf-8") as f:
+            pass
+    slice_res = slice_raw_image(new_stem, m, CSCAN_RAW_DIR,
+                                CSCAN_IMAGES_DIR, CSCAN_LABELS_DIR, CSCAN_META_DIR,
+                                read_classes(CSCAN_CLASSES_TXT))
+    if new_stem != stem:
+        _delete_cscan_raw(stem)
+    return {"ok": True, "stem": new_stem, "filename": new_stem + ext, "slice": slice_res}
+
+
 # endregion
 
 
@@ -1977,12 +2081,48 @@ def cscan_meta_parse(req: dict):
             elif parts and parts[0] and parts[0] != "NaN":
                 out["fiberGrade"] = parts[0]
 
-        # ② 中文别名扫描（补齐上面没填的）
+        # 隐去「探头…」整句，避免探头的词（如相控阵）串到方法等字段
+        probe_m = re.search(r"探头(?:是|为)?\s*[：:]?\s*[^，,。；;\n]*", text)
+        masked = text
+        if probe_m and probe_m.group(0).strip():
+            masked = (text[:probe_m.start()] + text[probe_m.end():]).strip()
+
+        # ② 中文别名扫描（补齐上面没填的；在去掉探头句的 masked 上跑）
         for key, table in _CSCAN_ZH.items():
             if not out.get(key):
-                out[key] = _pick_zh(text, table)
+                out[key] = _pick_zh(masked, table)
 
-        # ③ raw 已有值词典扫描（型号/牌号/材料等已知值；避免误匹配太短令牌）
+        # ③ 显式标签取号：型号/纤维牌号/基体牌号/纤维/基体 后直接跟的令牌
+        #    （即使 raw 词典里没见过也能解析，如 "纤维牌号ZA55GC"）
+        for key, label in (("matrixGrade", "基体牌号"), ("fiberGrade", "纤维牌号"),
+                           ("code", "型号"), ("matrix", "基体"), ("fiber", "纤维")):
+            if out.get(key):
+                continue
+            m = re.search(re.escape(label) + r"\s*[：:为是]?\s*([A-Za-z0-9][A-Za-z0-9._-]*)", text)
+            if m:
+                out[key] = m.group(1)
+
+        # ③.5 探头是/探头为/探头: …  → 后面的整句放 probe_type（到逗号/句号/换行截止）
+        if not out.get("probe_type"):
+            m = re.search(r"探头(?:是|为)?\s*[：:]?\s*([^，,。；;\n]+)", text)
+            if m:
+                out["probe_type"] = m.group(1).strip()
+
+        # ③.6 方法：只在显式「方法是/方法为/方法:…/检测方法…」时才更新
+        if not out.get("method"):
+            m = re.search(r"(?:检测)?方法(?:是|为)?\s*[：:]?\s*([A-Za-z0-9一-龥][A-Za-z0-9一-龥-]*)", text)
+            if m:
+                chunk = m.group(1)
+                code = _pick_zh(chunk, _CSCAN_ZH["method"])
+                if not code:
+                    for _c in set(_CSCAN_ZH["method"].values()):
+                        if chunk.upper() == _c:
+                            code = _c
+                            break
+                if code:
+                    out["method"] = code
+
+        # ④ raw 已有值词典扫描（型号/牌号/材料等已知值；避免误匹配太短令牌）
         vocab = _cscan_vocab()
         for key, values in vocab.items():
             if out.get(key):
