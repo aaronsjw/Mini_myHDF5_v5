@@ -935,13 +935,37 @@ async def cscan_analyze(
                 model_path = m["path"]
                 break
 
+    # 自动比例尺：若上传的是 raw 原图（文件名 stem 命中 raw/<stem>.json），
+    # 边车里 mm_per_px（标尺标定）或 scan_w_mm/scan_h_mm（物理矩形）二选一，
+    # 无需手工传 mm_per_px。显式传了 mm_per_px 则仍以其为准。
+    physical_mm = None
+    mm_from_meta = None
+    if mm_per_px in (None, "", 0):
+        stem0 = os.path.splitext(os.path.basename(file.filename or ""))[0]
+        side = _read_cscan_sidecar(stem0)
+        try:
+            mmp = float(side.get("mm_per_px") or 0)
+            if mmp > 0:
+                mm_from_meta = mmp
+        except (TypeError, ValueError):
+            mm_from_meta = None
+        if not mm_from_meta:
+            try:
+                wm = float(side.get("scan_w_mm") or 0)
+                hm = float(side.get("scan_h_mm") or 0)
+                if wm > 0 and hm > 0:
+                    physical_mm = (wm, hm)
+            except (TypeError, ValueError):
+                physical_mm = None
+    mm_in = mm_per_px if mm_per_px not in (None, "", 0) else mm_from_meta
+
     # 保存上传图片到临时文件并推理
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     tmp.write(await file.read())
     tmp.close()
     try:
-        res = analyze_cscan(tmp.name, model_path=model_path, mm_per_px=mm_per_px,
-                            conf=conf, iou=iou)
+        res = analyze_cscan(tmp.name, model_path=model_path, mm_per_px=mm_in,
+                            physical_mm=physical_mm, conf=conf, iou=iou)
     except Exception as e:
         return {"error": f"CScan 分析失败: {e}"}
     finally:

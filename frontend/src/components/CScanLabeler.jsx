@@ -3,12 +3,13 @@
 //       ③ 保存入库(raw 三件套 + 后台自动切片 images/labels/meta)
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import {
-    Card, Button, Select, Input, Tag, message, Collapse,
-    Row, Col, Space, Divider, Spin, Modal,
+    Card, Button, Select, Input, InputNumber, Tag, message, Collapse,
+    Space, Divider, Modal,
 } from 'antd'
 import {
     DeleteOutlined, UndoOutlined, SaveOutlined,
     ZoomInOutlined, ZoomOutOutlined, AimOutlined, PictureOutlined, ThunderboltOutlined,
+    CheckOutlined, CloseOutlined,
 } from '@ant-design/icons'
 import axios from 'axios'
 
@@ -17,9 +18,19 @@ const CW = 900          // canvas 内部宽(px)
 const CH = 600          // canvas 内部高(px)
 const HANDLE = 8        // 选中框角点手柄半径(canvas px)
 const MIN_NORM = 0.002  // 归一化最小宽高，小于则丢弃
+const RULER_COLOR = '#ff2bd6'  // 标尺醒目色：亮品红（与 C 扫图配色/缺陷框色区分度高）
 
 const clean = v => (String(v ?? '').trim().replace(/[/\\\s_]+/g, '-') || 'NaN')
 const pad2 = n => String(n).padStart(2, '0')
+const clamp01 = v => Math.max(0, Math.min(1, v))
+
+// 入库前确认框展示的元数据清单（按 详细字段 顺序）
+const REQ_FIELDS = [
+    { k: 'fiber', label: '纤维' }, { k: 'matrix', label: '基体' },
+    { k: 'structure', label: '结构' }, { k: 'method', label: '方法' },
+    { k: 'code', label: '型号' }, { k: 'fiberGrade', label: '纤维牌号' },
+    { k: 'matrixGrade', label: '基体牌号' }, { k: 'probe_type', label: '探头' },
+]
 const fileStamp = d => `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`
 
 let UID = 1
@@ -41,6 +52,12 @@ export default function CScanLabeler({ initial = null }) {
     const [parseText, setParseText] = useState('')        // 智能解析输入文字
     const [parsing, setParsing] = useState(false)
     const [imgSize, setImgSize] = useState(null)
+    // 标尺比例尺：画一条已知 mm 的线段 → mm/px；随保存写入 meta.mm_per_px
+    const [calib, setCalib] = useState(null)                 // {x1,y1,x2,y2,lenPx,mm,mmPerPx}（归一化端点）
+    const [draft, setDraft] = useState(null)                 // 画线进行中的预览 {x1,y1,x2,y2}
+    const [rulerSeg, setRulerSeg] = useState(null)           // 待填 mm 的线段 {x1,y1,x2,y2,lenPx}
+    const [rulerMm, setRulerMm] = useState(null)             // 弹窗里用户输入的 mm
+    const [rulerOpen, setRulerOpen] = useState(false)
 
     const [boxes, setBoxes] = useState([])               // {uid,class_id,x1,y1,x2,y2} 归一化
     const [selected, setSelected] = useState(-1)
@@ -48,9 +65,9 @@ export default function CScanLabeler({ initial = null }) {
     const [zoom, setZoom] = useState(1)
     const [pan, setPan] = useState({ x: 0, y: 0 })
     const [baseZoom, setBaseZoom] = useState(1)
-    const [showGrid, setShowGrid] = useState(true)
 
     const [saving, setSaving] = useState(false)
+    const [confirmOpen, setConfirmOpen] = useState(false)
     const [addClassOpen, setAddClassOpen] = useState(false)
     const [newCode, setNewCode] = useState('')
     const [newZh, setNewZh] = useState('')
@@ -58,6 +75,45 @@ export default function CScanLabeler({ initial = null }) {
     const canvasRef = useRef(null)
     const imgElRef = useRef(null)
     const dragRef = useRef(null)
+    const rulerRef = useRef(null)   // 画线中的实时端点（绕开 state 异步）
+    const zoomRef = useRef(1), panRef = useRef({ x: 0, y: 0 })
+    const baseRef = useRef(1), sizeRef = useRef(null)
+
+    // 同步最新视图参数到 ref（供滚轮监听使用）
+    useEffect(() => {
+        zoomRef.current = zoom; panRef.current = pan
+        baseRef.current = baseZoom; sizeRef.current = imgSize
+    })
+
+    // 滚轮：以光标为中心缩放（passive:false 才能 preventDefault 页面滚动）
+    useEffect(() => {
+        const cv = canvasRef.current
+        if (!cv) return
+        const onWheel = (e) => {
+            e.preventDefault()
+            const rect = cv.getBoundingClientRect()
+            const px = (e.clientX - rect.left) * (CW / rect.width)
+            const py = (e.clientY - rect.top) * (CH / rect.height)
+            const size = sizeRef.current
+            if (!size) return
+            const base = baseRef.current, z = zoomRef.current, pa = panRef.current
+            const Lw = size.w * base * z, Lh = size.h * base * z
+            const ox = (CW - Lw) / 2 + pa.x, oy = (CH - Lh) / 2 + pa.y
+            const k = e.deltaY < 0 ? 1.15 : 1 / 1.15
+            const nz = Math.max(0.1, Math.min(16, z * k))
+            const over = px >= ox && px <= ox + Lw && py >= oy && py <= oy + Lh
+            const nx = over ? (px - ox) / Lw : 0.5
+            const ny = over ? (py - oy) / Lh : 0.5
+            const nLw = size.w * base * nz, nLh = size.h * base * nz
+            setZoom(nz)
+            setPan({
+                x: (px - nx * nLw) - (CW - nLw) / 2,
+                y: (py - ny * nLh) - (CH - nLh) / 2,
+            })
+        }
+        cv.addEventListener('wheel', onWheel, { passive: false })
+        return () => cv.removeEventListener('wheel', onWheel)
+    }, [])
 
     // 类表
     useEffect(() => {
@@ -93,8 +149,11 @@ export default function CScanLabeler({ initial = null }) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [initial])
 
-    // 切图：重置框
-    useEffect(() => { setBoxes([]); setSelected(-1) }, [fileUrl])
+    // 切图：重置框与标尺
+    useEffect(() => {
+        setBoxes([]); setSelected(-1)
+        setCalib(null); setDraft(null); setRulerOpen(false); setRulerSeg(null); setRulerMm(null)
+    }, [fileUrl])
 
     // 布局换算
     const layout = () => {
@@ -122,21 +181,23 @@ export default function CScanLabeler({ initial = null }) {
         if (!c) return
         c.width = CW; c.height = CH
         const ctx = c.getContext('2d')
-        ctx.fillStyle = '#111'; ctx.fillRect(0, 0, CW, CH)
+        // 浅色棋盘格底（白/浅灰交错，透明底观感，像图像编辑工具）
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, CW, CH)
+        const CELL = 18
+        ctx.fillStyle = '#e3e3e3'
+        for (let row = 0; row * CELL < CH; row++)
+            for (let col = 0; col * CELL < CW; col++)
+                if ((row + col) % 2 === 1) ctx.fillRect(col * CELL, row * CELL, CELL, CELL)
         const img = imgElRef.current, L = layout()
         if (!img || !L) {
-            ctx.fillStyle = '#666'; ctx.font = '14px sans-serif'; ctx.textAlign = 'center'
+            ctx.fillStyle = '#8c8c8c'; ctx.font = '14px sans-serif'; ctx.textAlign = 'center'
             ctx.fillText('请选择一张 C 扫图（元数据 + 画框后保存入库）', CW / 2, CH / 2)
             ctx.textAlign = 'left'; return
         }
         ctx.drawImage(img, L.ox, L.oy, L.w, L.h)
-        if (showGrid) {
-            ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1
-            for (let g = 0; g <= 1; g += 0.1) {
-                ctx.beginPath(); ctx.moveTo(L.ox + L.w * g, L.oy); ctx.lineTo(L.ox + L.w * g, L.oy + L.h); ctx.stroke()
-                ctx.beginPath(); ctx.moveTo(L.ox, L.oy + L.h * g); ctx.lineTo(L.ox + L.w, L.oy + L.h * g); ctx.stroke()
-            }
-        }
+        // 图四周一圈淡淡的深描边，把图与棋盘格背景区分开
+        ctx.strokeStyle = 'rgba(0,0,0,0.22)'; ctx.lineWidth = 1
+        ctx.strokeRect(L.ox - 0.5, L.oy - 0.5, L.w + 1, L.h + 1)
         boxes.forEach((b, i) => {
             const x = L.ox + b.x1 * L.w, y = L.oy + b.y1 * L.h
             const w = (b.x2 - b.x1) * L.w, h = (b.y2 - b.y1) * L.h
@@ -152,7 +213,43 @@ export default function CScanLabeler({ initial = null }) {
                     ctx.fillRect(hx - HANDLE / 2, hy - HANDLE / 2, HANDLE, HANDLE)
             }
         })
-    }, [boxes, selected, zoom, pan, baseZoom, imgSize, fileUrl, classList, mode, showGrid])
+        // 标尺：草稿(亮橙虚线) + 已标定(品红粗实线，醒目；文字带深色底片便于阅读)
+        const drawSeg = (s, color, { dash = false, width = 2 } = {}) => {
+            const ax = L.ox + s.x1 * L.w, ay = L.oy + s.y1 * L.h
+            const bx = L.ox + s.x2 * L.w, by = L.oy + s.y2 * L.h
+            ctx.strokeStyle = color; ctx.lineWidth = width
+            ctx.setLineDash(dash ? [8, 5] : [])
+            ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke()
+            ctx.setLineDash([])
+            ctx.fillStyle = color
+            const r = dash ? 3 : 5
+            for (const [hx, hy] of [[ax, ay], [bx, by]]) {
+                ctx.beginPath(); ctx.arc(hx, hy, r, 0, Math.PI * 2); ctx.fill()
+            }
+            return { ax, ay, bx, by }
+        }
+        if (draft) drawSeg(draft, '#ffb020', { dash: true, width: 2 })
+        if (calib) {
+            const { ax, ay, bx, by } = drawSeg(calib, RULER_COLOR, { width: 3.5 })
+            const label = `${calib.mm}mm`   // 只显示长度，不显示 mm/px
+            ctx.font = 'bold 12px sans-serif'
+            const pw = ctx.measureText(label).width + 16, ph = 20
+            // 标签固定在标尺包围盒右下侧；空间不足也不回退（溢出部分被画布裁剪）
+            const rx = Math.max(ax, bx), byb = Math.max(ay, by)
+            const lx = rx + 10, ly = byb + 10
+            ctx.beginPath()
+            ctx.moveTo(lx, ly + 6)
+            ctx.arcTo(lx, ly, lx + 6, ly, 4); ctx.lineTo(lx + pw - 6, ly)
+            ctx.arcTo(lx + pw, ly, lx + pw, ly + 6, 4); ctx.lineTo(lx + pw, ly + ph - 6)
+            ctx.arcTo(lx + pw, ly + ph, lx + pw - 6, ly + ph, 4); ctx.lineTo(lx + 6, ly + ph)
+            ctx.arcTo(lx, ly + ph, lx, ly + ph - 6, 4); ctx.closePath()
+            ctx.fillStyle = 'rgba(15,15,22,0.74)'; ctx.fill()
+            ctx.strokeStyle = RULER_COLOR; ctx.lineWidth = 1.4; ctx.stroke()
+            ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
+            ctx.fillText(label, lx + 8, ly + ph / 2 + 0.5)
+            ctx.textBaseline = 'alphabetic'
+        }
+    }, [boxes, selected, zoom, pan, baseZoom, imgSize, fileUrl, classList, mode, draft, calib])
     useEffect(() => { draw() }, [draw])
 
     // ── 鼠标交互 ──
@@ -184,6 +281,13 @@ export default function CScanLabeler({ initial = null }) {
             dragRef.current = { type: 'pan', sx: e.clientX, sy: e.clientY, panX: pan.x, panY: pan.y }
             return
         }
+        if (mode === 'ruler') {
+            if (!L || !imgSize || !(px >= L.ox && px <= L.ox + L.w && py >= L.oy && py <= L.oy + L.h)) return
+            const p = toImg(px, py)
+            const seg = { x1: p.x, y1: p.y, x2: p.x, y2: p.y }
+            setDraft(seg); rulerRef.current = seg; dragRef.current = { type: 'ruler' }
+            return
+        }
         const hit = hitTest(px, py)
         if (hit.idx >= 0) {
             const b = boxes[hit.idx]
@@ -207,6 +311,24 @@ export default function CScanLabeler({ initial = null }) {
         if (!d) return
         if (d.type === 'pan') { setPan({ x: d.panX + (e.clientX - d.sx), y: d.panY + (e.clientY - d.sy) }); return }
         const p = toImg(evtPos(e).x, evtPos(e).y)
+        if (d.type === 'ruler') {
+            const s0 = rulerRef.current
+            let x2 = p.x, y2 = p.y
+            // Shift 按住：方向吸附到 0°/45°/90°/…（长度不变，像素空间算角）
+            if (e.shiftKey && imgSize) {
+                const dx = (p.x - s0.x1) * imgSize.w
+                const dy = (p.y - s0.y1) * imgSize.h
+                const len = Math.hypot(dx, dy)
+                if (len > 1e-6) {
+                    const rad = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4)
+                    x2 = s0.x1 + (Math.cos(rad) * len) / imgSize.w
+                    y2 = s0.y1 + (Math.sin(rad) * len) / imgSize.h
+                }
+            }
+            rulerRef.current = { ...s0, x2, y2 }
+            setDraft({ ...rulerRef.current })
+            return
+        }
         if (d.type === 'new') {
             setBoxes(prev => prev.map((b, i) => i === prev.length - 1 ? {
                 ...b,
@@ -233,9 +355,23 @@ export default function CScanLabeler({ initial = null }) {
         }
     }
     const onMouseUp = () => {
-        if (dragRef.current?.type === 'new') {
+        const d = dragRef.current
+        if (d?.type === 'new') {
             setBoxes(prev => prev.filter(b => b.x2 - b.x1 > MIN_NORM && b.y2 - b.y1 > MIN_NORM))
             setSelected(prev => Math.min(prev, Math.max(boxes.length, 0)))
+        } else if (d?.type === 'ruler') {
+            const s = rulerRef.current
+            if (s && imgSize) {
+                const seg = { x1: clamp01(s.x1), y1: clamp01(s.y1), x2: clamp01(s.x2), y2: clamp01(s.y2) }
+                const lenPx = Math.hypot((seg.x2 - seg.x1) * imgSize.w, (seg.y2 - seg.y1) * imgSize.h)
+                if (lenPx >= 10) {
+                    setRulerSeg({ ...seg, lenPx: Math.round(lenPx * 10) / 10 })
+                    setRulerMm(null); setRulerOpen(true)
+                } else {
+                    message.warning('线段太短，请重画（至少约 10 像素）')
+                }
+            }
+            setDraft(null); rulerRef.current = null
         }
         dragRef.current = null
     }
@@ -244,21 +380,23 @@ export default function CScanLabeler({ initial = null }) {
         setBoxes(prev => prev.filter((_, i) => i !== selected))
         setSelected(-1)
     }
+    // 无框 → 整图为好区/背景(OK)，不再沿用默认缺陷类型
+    const effectiveDefect = boxes.length ? defectType : 'OK'
     // 预览规范化文件名
     const previewStem = [
         clean(meta.fiber), clean(meta.matrix), clean(meta.structure), clean(meta.method),
-        clean(defectType), clean(meta.code),
+        clean(effectiveDefect), clean(meta.code),
         /^\d{14}$/.test(meta.timestamp || '')
             ? meta.timestamp
             : fileStamp(cur?.file?.lastModified ? new Date(cur.file.lastModified) : new Date()),
         clean(meta.fiberGrade), clean(meta.matrixGrade),
     ].join('_')
 
-    // 保存入库(自动切片)
-    const save = async () => {
+    // 保存入库(自动切片)：确认弹窗里点「确定入库」才真正调用
+    const doSave = async () => {
         if (!cur) { message.warning('没有当前图片'); return }
         if (!imgSize) return
-        if (!defectType) { message.warning('请选择整图缺陷类型'); return }
+        if (!effectiveDefect) { message.warning('请选择整图缺陷类型'); return }
         const ts = String(meta.timestamp || '')
         if (ts && !/^\d{14}$/.test(ts)) { message.warning('时间戳需为 14 位数字，或留空自动取文件时间'); return }
         setSaving(true)
@@ -266,12 +404,14 @@ export default function CScanLabeler({ initial = null }) {
             const m = {
                 ...meta,
                 timestamp: /^\d{14}$/.test(ts) ? ts : '',
-                defectType,
+                defectType: effectiveDefect,
                 fiber: meta.fiber || 'NaN', matrix: meta.matrix || 'NaN',
                 structure: meta.structure || 'NaN', method: meta.method || 'NaN',
                 code: meta.code || 'NaN', fiberGrade: meta.fiberGrade || 'NaN',
                 matrixGrade: meta.matrixGrade || 'NaN',
             }
+            // 标尺 mm/px：若已标定则写入（analyze 据此自动换算 mm）
+            if (calib) m.mm_per_px = Number(calib.mmPerPx.toFixed(6))
             const yolo = boxes.map(b => ({
                 class_id: b.class_id,
                 cx: (b.x1 + b.x2) / 2, cy: (b.y1 + b.y2) / 2,
@@ -287,6 +427,16 @@ export default function CScanLabeler({ initial = null }) {
         } catch (e) {
             message.error(`保存失败: ${e?.response?.data?.error || e.message || ''}`)
         } finally { setSaving(false) }
+    }
+
+    // 点「保存入库」：先校验并弹确认框（标注信息 + 元数据填写情况）
+    const openConfirm = () => {
+        if (!cur) { message.warning('没有当前图片'); return }
+        if (!imgSize) return
+        if (!effectiveDefect) { message.warning('请选择整图缺陷类型'); return }
+        const ts = String(meta.timestamp || '')
+        if (ts && !/^\d{14}$/.test(ts)) { message.warning('时间戳需为 14 位数字，或留空自动取文件时间'); return }
+        setConfirmOpen(true)
     }
 
     // 新增缺陷类
@@ -331,7 +481,6 @@ export default function CScanLabeler({ initial = null }) {
                 description: prev.description || text,
             }))
             if (m.defectType) setDefectType(m.defectType)
-            message.success('已智能解析并填充，展开“详细字段”可微调')
         } catch (e) {
             message.error('解析失败')
         } finally {
@@ -339,16 +488,38 @@ export default function CScanLabeler({ initial = null }) {
         }
     }
 
+    // ── 标尺比例尺 ──
+    const applyCalib = () => {
+        const seg = rulerSeg
+        const mm = Number(rulerMm)
+        if (!seg || !(mm > 0)) { message.warning('请输入该线段对应的毫米数'); return }
+        const mmPerPx = mm / seg.lenPx
+        setCalib({ ...seg, mm, mmPerPx })
+        setRulerOpen(false); setRulerSeg(null); setMode('annotate')
+    }
+    const cancelCalib = () => { setRulerOpen(false); setRulerSeg(null); setMode('annotate') }
+    const toggleRuler = () => {
+        if (mode === 'ruler') { setMode('annotate'); return }
+        setSelected(-1); setMode('ruler')
+    }
+
     const metaKeys = ['fiber', 'matrix', 'structure', 'method', 'code', 'fiberGrade', 'matrixGrade', 'probe_type']
     const filledMetaN = metaKeys.filter(k => (meta[k] || '').trim()).length
     const selBox = selected >= 0 ? boxes[selected] : null
     const classSelValue = selBox ? selBox.class_id : currentClassId
+    // 确认框：各类别计数 / 缺填统计 / 整图缺陷中文
+    const tallyCounts = {}
+    boxes.forEach(b => { const c = codeOf(b.class_id); tallyCounts[c] = (tallyCounts[c] || 0) + 1 })
+    const missingN = REQ_FIELDS.filter(f => !(meta[f.k] || '').trim()).length
+    const dtCls = classList.find(c => c.code === effectiveDefect)
+    const dtZh = dtCls?.zh || (effectiveDefect === 'OK' ? '好区 / 背景' : '')
+    const dtColor = dtCls ? colorOf(dtCls.id) : (effectiveDefect === 'OK' ? '#52c41a' : '#999')
 
     return (
         <div style={{ height: '100%', overflow: 'auto', paddingRight: 4 }}>
-            <Row gutter={12}>
-                {/* 左：元数据 + 入库 */}
-                <Col span={7}>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                {/* 右：元数据 + 入库（固定宽放右；画布左移靠 order:1） */}
+                <div style={{ width: 460, flexShrink: 0, order: 2 }}>
                     <Card size="small" title={<Space><PictureOutlined />元数据 & 入库</Space>}>
                         {/* 智能解析：一段文字 → 自动填充 */}
                         <div style={{ marginBottom: 8 }}>
@@ -362,6 +533,9 @@ export default function CScanLabeler({ initial = null }) {
                             </Button>
                         </div>
 
+                        <Divider style={{ margin: '4px 0 8px' }} />
+                        <div style={{ fontSize: 12, color: '#888' }}>规范文件名预览</div>
+                        <Tag color="geekblue" style={{ whiteSpace: 'normal', wordBreak: 'break-all', marginTop: 4 }}>{previewStem}.png</Tag>
                         <Divider style={{ margin: '4px 0 8px' }} />
                         <Collapse ghost size="small"
                             items={[{
@@ -420,22 +594,19 @@ export default function CScanLabeler({ initial = null }) {
                                     </Space>
                                 ),
                             }]} />
-                        <Divider style={{ margin: '4px 0 8px' }} />
-                        <div style={{ fontSize: 12, color: '#888' }}>规范文件名预览（后端为准）</div>
-                        <Tag color="geekblue" style={{ whiteSpace: 'normal', wordBreak: 'break-all', marginTop: 4 }}>{previewStem}.png</Tag>
-                        <Button type="primary" block icon={<SaveOutlined />} loading={saving} onClick={save}
+                        <Button type="primary" block icon={<SaveOutlined />} loading={saving} onClick={openConfirm}
                             disabled={!cur || !imgSize} style={{ marginTop: 8 }}>
                             保存入库（自动切片）
                         </Button>
                         {boxes.length === 0 &&
                             <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>当前无框 → 作为背景/无缺陷整图入库（仍切为背景 tile）</div>}
                     </Card>
-                </Col>
+                </div>
 
-                {/* 右：标注画布 */}
-                <Col span={17}>
+                {/* 左：缺陷标注 画布（order:1 排最左，占主要宽度） */}
+                <div style={{ flex: 1, minWidth: 0, order: 1 }}>
                     <Card size="small" title="缺陷标注"
-                        extra={<Tag color="blue">空白拖拽=画新框；点框选中 → 拖身移动 / 拖角缩放 / 删</Tag>}
+                        extra={<Tag color="blue">空白拖拽=画新框；点框选中→拖/缩放/删；标尺=拖线段定 mm/px</Tag>}
                         bodyStyle={{ padding: 8 }}>
                         <Space wrap style={{ marginBottom: 8 }}>
                             <Select size="small" style={{ width: 170 }} value={classSelValue}
@@ -445,11 +616,14 @@ export default function CScanLabeler({ initial = null }) {
                                 }}
                                 options={classOptions} placeholder="类别(作用于选中框或新框)" />
                             <Button size="small" type={mode === 'annotate' ? 'primary' : 'default'} onClick={() => setMode('annotate')}>标注</Button>
-                            <Button size="small" type={mode === 'pan' ? 'primary' : 'default'} onClick={() => setMode('pan')}>平移</Button>
+                            <Button size="small" type={mode === 'pan' ? 'primary' : 'default'} icon={<PanIcon />}
+                                title="平移：按住拖动画布" onClick={() => setMode('pan')} />
                             <Button size="small" icon={<ZoomInOutlined />} onClick={() => setZoom(z => Math.min(z * 1.25, 16))} />
                             <Button size="small" icon={<ZoomOutOutlined />} onClick={() => setZoom(z => Math.max(z / 1.25, 0.1))} />
-                            <Button size="small" icon={<AimOutlined />} onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }) }}>适配</Button>
-                            <Button size="small" onClick={() => setShowGrid(v => !v)}>{showGrid ? '隐藏网格' : '网格'}</Button>
+                            <Button size="small" icon={<AimOutlined />} title="适配：复位缩放/平移" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }) }} />
+                            <Button size="small" type={mode === 'ruler' ? 'primary' : 'default'} icon={<RulerIcon />}
+                                title="标尺：画一条已知长度的线段，定 mm/px 比例尺"
+                                onClick={toggleRuler} />
                             <Divider type="vertical" />
                             <Tag color="purple">{selBox ? `${codeOf(selBox.class_id)} #${selected + 1}` : '未选中'}</Tag>
                             <Button size="small" danger icon={<DeleteOutlined />} onClick={deleteSelected} disabled={selected < 0}>删除选中</Button>
@@ -457,7 +631,7 @@ export default function CScanLabeler({ initial = null }) {
                         </Space>
                         <div style={{ textAlign: 'center' }}>
                             <canvas ref={canvasRef}
-                                style={{ width: '100%', background: '#111', border: '1px solid #e8e8e8', borderRadius: 4, cursor: mode === 'pan' ? 'grab' : 'crosshair' }}
+                                style={{ width: '100%', background: '#f0f0f0', border: '1px solid #d9d9d9', borderRadius: 4, cursor: mode === 'pan' ? 'grab' : 'crosshair' }}
                                 onMouseDown={onMouseDown} onMouseMove={onMouseMove}
                                 onMouseUp={onMouseUp} onMouseLeave={onMouseUp} />
                         </div>
@@ -471,8 +645,8 @@ export default function CScanLabeler({ initial = null }) {
                             {boxes.length === 0 && <span style={{ color: '#bbb', fontSize: 12 }}>在图上拖拽画缺陷框，或直接保存为背景</span>}
                         </div>
                     </Card>
-                </Col>
-            </Row>
+                </div>
+            </div>
 
             <Modal title="新增缺陷码（写入 raw/labels.txt + codes.json）" open={addClassOpen}
                 onOk={addClass} onCancel={() => setAddClassOpen(false)} okText="新增" cancelText="取消">
@@ -480,6 +654,79 @@ export default function CScanLabeler({ initial = null }) {
                     <Input addonBefore="缺陷码" placeholder="如 Vo / In / Rs" value={newCode} onChange={e => setNewCode(e.target.value)} />
                     <Input addonBefore="中文名" placeholder="如 气孔 / 夹杂 / 富树脂" value={newZh} onChange={e => setNewZh(e.target.value)} />
                     <div style={{ color: '#999', fontSize: 12 }}>新增后旧 best.pt 无法检出该类，需在 tools 重新训练。</div>
+                </Space>
+            </Modal>
+
+            <Modal title="标尺标定" open={rulerOpen} onOk={applyCalib} onCancel={cancelCalib}
+                okText="确定" cancelText="取消" maskClosable={false} width={380}>
+                <Space direction="vertical" style={{ width: '100%' }}>
+                    <div style={{ color: '#666', fontSize: 13 }}>
+                        该线段在图上有 <b>{rulerSeg?.lenPx ?? '-'} px</b>，在实际零件上对应多少 mm？
+                    </div>
+                    <InputNumber style={{ width: '100%' }} min={0.01} precision={3}
+                        placeholder="输入 mm，如 20" addonAfter="mm"
+                        value={rulerMm} onChange={v => setRulerMm(v)} />
+                </Space>
+            </Modal>
+
+            <Modal title="确认入库？" open={confirmOpen} width={520}
+                onOk={() => { setConfirmOpen(false); doSave() }}
+                onCancel={() => setConfirmOpen(false)}
+                okText="确定入库" cancelText="再检查" okButtonProps={{ loading: saving }}>
+                <Space direction="vertical" style={{ width: '100%' }} size={4}>
+                    <div style={{ fontWeight: 600, marginBottom: 2 }}>标注信息</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: 13 }}>
+                        整图类别：
+                        <Tag color={dtColor} style={{ marginRight: 0 }}>
+                            {effectiveDefect}{dtZh ? ` · ${dtZh}` : ''}
+                        </Tag>
+                    </div>
+                    <div style={{ fontSize: 13 }}>
+                        {boxes.length === 0
+                            ? <span style={{ color: '#52c41a' }}>未画缺陷框 → 按「好区 / 背景（OK）」整图入库</span>
+                            : <>
+                                <span>画框 {boxes.length} 个：</span>
+                                {Object.entries(tallyCounts).map(([c, n]) => (
+                                    <Tag key={c} color={colorOf(classList.find(x => x.code === c)?.id)} style={{ marginRight: 0 }}>{c} × {n}</Tag>
+                                ))}
+                              </>}
+                    </div>
+                    <Divider style={{ margin: '4px 0' }} />
+                    <div style={{ fontWeight: 600 }}>
+                        元数据填写情况
+                        {missingN > 0 && <span style={{ color: '#ff4d4f', fontWeight: 400 }}>（缺 {missingN} 项）</span>}
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 18, rowGap: 3 }}>
+                        {REQ_FIELDS.map(f => {
+                            const v = (meta[f.k] || '').trim()
+                            return (
+                                <div key={f.k} style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+                                    <span style={{ flexShrink: 0, width: 60, textAlign: 'right', color: '#888', fontSize: 12 }}>{f.label}</span>
+                                    {v
+                                        ? <CheckOutlined style={{ color: '#52c41a', flexShrink: 0 }} />
+                                        : <CloseOutlined style={{ color: '#ff4d4f', flexShrink: 0 }} />}
+                                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, color: v ? '#333' : '#ff4d4f' }}
+                                        title={v}>{v || '未填写'}</span>
+                                </div>
+                            )
+                        })}
+                        {/* 比例尺：与元数据同样式（可选，未标定仅提示不影响入库） */}
+                        <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+                            <span style={{ flexShrink: 0, width: 60, textAlign: 'right', color: '#888', fontSize: 12 }}>比例尺</span>
+                            {calib
+                                ? <CheckOutlined style={{ color: '#52c41a', flexShrink: 0 }} />
+                                : <CloseOutlined style={{ color: '#ff4d4f', flexShrink: 0 }} />}
+                            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, color: calib ? '#333' : '#ff4d4f' }}
+                                title={calib ? `≈${calib.mmPerPx.toFixed(4)} mm/px` : ''}>
+                                {calib
+                                    ? `≈${calib.mmPerPx.toFixed(4)} mm/px（${calib.mm}mm / ${calib.lenPx}px）`
+                                    : '未标定'}
+                            </span>
+                        </div>
+                    </div>
+                    <div style={{ color: '#aaa', fontSize: 12 }}>
+                        {meta.timestamp ? `时间戳：${meta.timestamp}` : '时间戳未填 → 自动取文件修改时间'}
+                    </div>
                 </Space>
             </Modal>
         </div>
@@ -507,5 +754,37 @@ function MetaField({ label, v, onChange, opts = [], placeholder, labelWidth = 64
                         onChange={e => onChange(e.target.value)} />}
             </div>
         </div>
+    )
+}
+
+// 直尺图标（Lucide "ruler"，ISC License，斜 45° 刻度尺，随按钮颜色 currentColor）
+function RulerIcon({ style }) {
+    return (
+        <svg viewBox="0 0 24 24" width="1em" height="1em"
+            style={{ verticalAlign: '-0.125em', ...style }}
+            fill="none" stroke="currentColor" strokeWidth="2"
+            strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z" />
+            <path d="m14.5 12.5 2-2" />
+            <path d="m11.5 9.5 2-2" />
+            <path d="m8.5 6.5 2-2" />
+            <path d="m17.5 15.5 2-2" />
+        </svg>
+    )
+}
+
+// 手掌图标（Lucide "grab"，ISC License，平放抓取手掌，用于平移/拖动）
+function PanIcon({ style }) {
+    return (
+        <svg viewBox="0 0 24 24" width="1em" height="1em"
+            style={{ verticalAlign: '-0.125em', ...style }}
+            fill="none" stroke="currentColor" strokeWidth="2"
+            strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 11.5V9a2 2 0 0 0-2-2a2 2 0 0 0-2 2v1.4" />
+            <path d="M14 10V8a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2" />
+            <path d="M10 9.9V9a2 2 0 0 0-2-2a2 2 0 0 0-2 2v5" />
+            <path d="M6 14a2 2 0 0 0-2-2a2 2 0 0 0-2 2" />
+            <path d="M18 11a2 2 0 1 1 4 0v3a8 8 0 0 1-8 8h-4a8 8 0 0 1-8-8 2 2 0 1 1 4 0" />
+        </svg>
     )
 }

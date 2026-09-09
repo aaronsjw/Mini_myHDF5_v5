@@ -155,21 +155,29 @@ def _min_edge_gap_px(boxes: list):
 # ════════════ 主推理 ════════════
 
 def analyze_cscan(image_path: str, model_path: str = "", mm_per_px=None,
-                  conf: float = 0.35, iou: float = 0.45, device: str = "cpu") -> dict:
+                  physical_mm=None, conf: float = 0.35, iou: float = 0.45,
+                  device: str = "cpu") -> dict:
     """
     对一张 C 扫图跑 YOLO 缺陷检测。
+
+    比例尺二选一（都缺 → mm 字段为 None，但 area_pct 仍按像素占比给出）：
+      - mm_per_px: 整幅图统一比例尺（px → mm，各向同性）
+      - physical_mm: 整幅图对应的物理矩形 (宽_mm, 高_mm)，按各轴自动换算
+                     mm/px_x = 宽_mm/W、mm/px_y = 高_mm/H
 
     返回:
     {
       "model": model_path,
       "image": {"width", "height", "physical_w_mm", "physical_h_mm"},
-      "mm_per_px": float|None,
+      "mm_per_px": float|None(各向同性时才给), "scale_source": "mm_per_px"|"physical_mm"|None,
       "detections": [{index, class_id, class_name_en, class_name_zh, confidence,
-                      xyxy, w_px, h_px, w_mm, h_mm, z_mm, area_mm2, area_pct}],
-      "stats": {count, total_area_mm2, total_area_pct, max_z_mm, max_dim_mm,
-                min_edge_gap_mm, per_class:[...]}
+                      xyxy, w_px, h_px, area_px, area_pct,
+                      w_mm, h_mm, z_mm, area_mm2}],   # mm_* 仅在比例尺存在时非空
+      "stats": {count, total_area_px, total_area_pct, total_area_mm2, max_z_mm,
+                max_dim_mm, min_edge_gap_mm, per_class:[...]}
     }
-    mm_per_px 为空时 mm/area/area_pct 相关字段均为 None。
+    注：area_pct（面积占比）恒可由像素直算 = px 面积 / 整幅 px 面积，
+        与 mm/px 无关（比例同相消），故无比例尺时也给出。
     """
     if not ULTRALYTICS_AVAILABLE:
         raise RuntimeError("ultralytics 未安装")
@@ -217,33 +225,48 @@ def analyze_cscan(image_path: str, model_path: str = "", mm_per_px=None,
         hits = [tile_hits[i] for i in kept]
         hits.sort(key=lambda t: t[1], reverse=True)
 
-    mm = float(mm_per_px) if mm_per_px not in (None, "", 0) else None
-    phys_w_mm = W * mm if mm else None
-    phys_h_mm = H * mm if mm else None
-    image_area_mm2 = (phys_w_mm * phys_h_mm) if mm else None
+    # ── 比例尺解析：显式 mm_per_px 优先，其次整幅图的物理矩形(mm) 自动按轴换算 ──
+    if mm_per_px not in (None, "", 0):
+        mmx = mmy = float(mm_per_px)
+        scale_source = "mm_per_px"
+    elif physical_mm and len(physical_mm) == 2 and all(
+            v not in (None, "", 0) for v in physical_mm):
+        mmx, mmy = float(physical_mm[0]) / W, float(physical_mm[1]) / H
+        scale_source = "physical_mm"
+    else:
+        mmx = mmy = None
+        scale_source = None
+    have_scale = mmx is not None
+    phys_w_mm = W * mmx if have_scale else None
+    phys_h_mm = H * mmy if have_scale else None
+    image_px = W * H
+    image_area_mm2 = (phys_w_mm * phys_h_mm) if have_scale else None
 
     detections = []
     for idx, (cid, c, x1, y1, x2, y2) in enumerate(hits):
         en, zh = CSCAN_CLASSES[cid]
         wpx, hpx = x2 - x1, y2 - y1
+        area_px = wpx * hpx
         det = {
             "index": idx, "class_id": cid,
             "class_name_en": en, "class_name_zh": zh,
             "confidence": round(c, 4),
             "xyxy": [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
             "w_px": round(wpx, 1), "h_px": round(hpx, 1),
+            # 面积占比恒可由像素直算（比例同相消，与 mm/px 无关）
+            "area_px": round(area_px, 1),
+            "area_pct": round(area_px / image_px * 100, 4) if image_px else None,
         }
-        if mm:
-            wmm, hmm = wpx * mm, hpx * mm
+        if have_scale:
+            wmm, hmm = wpx * mmx, hpx * mmy
             zmm = (wmm + hmm) / 2
             area_mm2 = wmm * hmm
             det.update({
                 "w_mm": round(wmm, 2), "h_mm": round(hmm, 2), "z_mm": round(zmm, 2),
                 "area_mm2": round(area_mm2, 2),
-                "area_pct": round(area_mm2 / image_area_mm2 * 100, 4) if image_area_mm2 else None,
             })
         else:
-            det.update(w_mm=None, h_mm=None, z_mm=None, area_mm2=None, area_pct=None)
+            det.update(w_mm=None, h_mm=None, z_mm=None, area_mm2=None)
         detections.append(det)
 
     # ── 统计 ──
@@ -252,39 +275,47 @@ def analyze_cscan(image_path: str, model_path: str = "", mm_per_px=None,
         pc = per_class.setdefault(d["class_id"], {
             "class_id": d["class_id"], "class_name_en": d["class_name_en"],
             "class_name_zh": d["class_name_zh"], "count": 0,
-            "max_z_mm": None, "total_area_mm2": None, "total_area_pct": None,
+            "max_z_mm": None, "total_area_px": None, "total_area_mm2": None,
+            "total_area_pct": None,
         })
         pc["count"] += 1
-        if mm:
+        pc["total_area_px"] = (pc["total_area_px"] or 0) + d["area_px"]
+        if have_scale:
             pc["max_z_mm"] = d["z_mm"] if pc["max_z_mm"] is None else max(pc["max_z_mm"], d["z_mm"])
             pc["total_area_mm2"] = (pc["total_area_mm2"] or 0) + d["area_mm2"]
 
     for pc in per_class.values():
-        if mm and image_area_mm2 and pc["total_area_mm2"] is not None:
+        if pc["total_area_px"] is not None and image_px:
+            pc["total_area_px"] = round(pc["total_area_px"], 1)
+            pc["total_area_pct"] = round(pc["total_area_px"] / image_px * 100, 4)
+        if have_scale and pc["total_area_mm2"] is not None:
             pc["total_area_mm2"] = round(pc["total_area_mm2"], 2)
-            pc["total_area_pct"] = round(pc["total_area_mm2"] / image_area_mm2 * 100, 4)
 
     stats = {
         "count": len(detections),
-        "total_area_mm2": None, "total_area_pct": None,
+        "total_area_px": None, "total_area_mm2": None, "total_area_pct": None,
         "max_z_mm": None, "max_dim_mm": None, "min_edge_gap_mm": None,
         "per_class": [per_class[k] for k in sorted(per_class)],
     }
-    if mm and detections:
-        total = sum(d["area_mm2"] for d in detections)
+    if detections:
         gap_px = _min_edge_gap_px([d["xyxy"] for d in detections])
-        stats["total_area_mm2"] = round(total, 2)
-        stats["total_area_pct"] = round(total / image_area_mm2 * 100, 4) if image_area_mm2 else None
-        stats["max_z_mm"] = round(max(d["z_mm"] for d in detections), 2)
-        stats["max_dim_mm"] = round(max(max(d["w_mm"], d["h_mm"]) for d in detections), 2)
-        stats["min_edge_gap_mm"] = round(gap_px * mm, 2) if gap_px is not None else None
+        total_px = sum(d["area_px"] for d in detections)
+        stats["total_area_px"] = round(total_px, 1)
+        if image_px:
+            stats["total_area_pct"] = round(total_px / image_px * 100, 4)
+        if have_scale:
+            stats["total_area_mm2"] = round(sum(d["area_mm2"] for d in detections), 2)
+            stats["max_z_mm"] = round(max(d["z_mm"] for d in detections), 2)
+            stats["max_dim_mm"] = round(max(max(d["w_mm"], d["h_mm"]) for d in detections), 2)
+            stats["min_edge_gap_mm"] = round(gap_px * mmx, 2) if gap_px is not None else None
 
     return {
         "model": os.path.basename(model_path),
         "image": {"width": W, "height": H,
                   "physical_w_mm": round(phys_w_mm, 2) if phys_w_mm else None,
                   "physical_h_mm": round(phys_h_mm, 2) if phys_h_mm else None},
-        "mm_per_px": mm,
+        "mm_per_px": round((mmx + mmy) / 2, 6) if have_scale else None,
+        "scale_source": scale_source,
         "detections": detections,
         "stats": stats,
     }
@@ -295,8 +326,9 @@ def build_cscan_features(stats: dict, abbr: str = "") -> dict:
     把 analyze_cscan 的 stats 聚合成验收引擎用的 cscan_* 标量键。
 
     规则：abbr（权威缺陷类别）有检出 → 取该类聚合；否则取整体最严
-    （max_z / max_area_pct）。无 mm_per_px 时尺寸键为 None —— 验收据此走
-    "仍需补充尺寸"分支，与纯 AScan 行为一致。
+    （max_z / max_area_pct）。无比例尺时 mm 类键为 None，但 area_pct 恒由
+    像素占比给出 —— 验收按各缺陷 cscan_thresholds.grade_field 是否给出决定
+    能否判定（面积占比类缺陷无需 mm，Z 尺寸类缺陷缺 mm 仍走"需补充尺寸"）。
     """
     per = {p["class_id"]: p for p in stats.get("per_class", [])}
     pick = None

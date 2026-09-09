@@ -179,12 +179,13 @@ class AcceptanceChecker:
         needs_cscan = criteria.get("needs_cscan", False)
         fatal = [v for v in violations if v["action"] == "不合格"]
         warnings = [v for v in violations if v["action"] != "不合格"]
-        has_cscan_size = any(
-            k in features and features[k] is not None
-            for k in ("cscan_z_value", "cscan_area_pct", "cscan_max_dim_mm")
-        )
-        # CScan 已检出缺陷(cscan_count>0) 但缺尺寸特征(没给 mm/px) → 无法换算物理尺寸
-        cscan_unsized = not has_cscan_size and int(features.get("cscan_count", 0) or 0) > 0
+        # CScan 能否做尺寸判定取决于该缺陷的主判据字段（cscan_thresholds.grade_field）是否给出。
+        # area_pct 可由像素直算(无需 mm/px，孔隙/富树脂用它)；但 Z/最大尺寸等 mm 量必须给比例尺。
+        cs_thr = criteria.get("cscan_thresholds") or {}
+        cs_primary = cs_thr.get("grade_field")
+        cscan_evaluable = bool(cs_primary) and features.get(cs_primary) is not None
+        # CScan 已检出缺陷(cscan_count>0) 但缺主判据(如给不出 mm) → 无法换算物理尺寸
+        cscan_unsized = not cscan_evaluable and int(features.get("cscan_count", 0) or 0) > 0
 
         if fatal:
             # 信号层面已足以判定不合格（如底波消失=脱粘），无需尺寸
@@ -192,8 +193,8 @@ class AcceptanceChecker:
             reason = "不合格：" + "；".join([v["description"] for v in fatal])
             if warnings:
                 reason += f"。另有警告：{'；'.join([v['description'] for v in warnings])}"
-        elif needs_cscan and has_cscan_size:
-            # needs_cscan 缺陷且带 CScan 尺寸特征 → 机器阈值判定（与 AScan 是否有可疑无关）
+        elif needs_cscan and cscan_evaluable:
+            # needs_cscan 缺陷且主判据已给 → 机器阈值判定（与 AScan 是否有可疑无关）
             cs = self._eval_cscan(criteria, features, grade)
             cs_fatal = [v for v in cs if v["action"] == "不合格"]
             cs_warn = [v for v in cs if v["action"] != "不合格"]

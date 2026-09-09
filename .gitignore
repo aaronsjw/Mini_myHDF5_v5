@@ -44,14 +44,14 @@ backend/reports/*.docx
 *.h5
 *.hdf5
 
-# CScan data & derived artifacts (keep code + raw text annotations only)
+# CScan data & derived artifacts (raw 样本一律不入库; 仅保留类表与占位)
 dataset/cscan_dataset/images/
 dataset/cscan_dataset/labels/
 dataset/cscan_dataset/meta/
-dataset/cscan_dataset/raw/*.bmp
-dataset/cscan_dataset/raw/*.png
-dataset/cscan_dataset/raw/*.jpg
-dataset/cscan_dataset/raw/*.jpeg
+dataset/cscan_dataset/raw/*
+!dataset/cscan_dataset/raw/.gitkeep
+!dataset/cscan_dataset/raw/labels.txt
+!dataset/cscan_dataset/raw/classes.txt
 dataset/cscan_dataset/超声C扫/
 dataset/cscan_dataset/runs/
 dataset/cscan_dataset/train.txt
