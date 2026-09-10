@@ -4,12 +4,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import {
     Card, Button, Select, Input, InputNumber, Tag, message, Collapse,
-    Space, Divider, Modal,
+    Space, Divider, Modal, Checkbox,
 } from 'antd'
 import {
     DeleteOutlined, UndoOutlined, SaveOutlined,
-    ZoomInOutlined, ZoomOutOutlined, AimOutlined, PictureOutlined, ThunderboltOutlined,
-    CheckOutlined, CloseOutlined,
+    ZoomInOutlined, ZoomOutOutlined, AimOutlined, FormOutlined, ThunderboltOutlined,
+    CheckOutlined, CloseOutlined, ScanOutlined,
 } from '@ant-design/icons'
 import axios from 'axios'
 
@@ -19,6 +19,12 @@ const CH = 600          // canvas 内部高(px)
 const HANDLE = 8        // 选中框角点手柄半径(canvas px)
 const MIN_NORM = 0.002  // 归一化最小宽高，小于则丢弃
 const RULER_COLOR = '#ff2bd6'  // 标尺醒目色：亮品红（与 C 扫图配色/缺陷框色区分度高）
+
+// 空的元数据模板（换图时用它清空）
+const EMPTY_META = {
+    fiber: '', matrix: '', structure: '', method: '', code: '',
+    fiberGrade: '', matrixGrade: '', timestamp: '', probe_type: '', description: '',
+}
 
 const clean = v => (String(v ?? '').trim().replace(/[/\\\s_]+/g, '-') || 'NaN')
 const pad2 = n => String(n).padStart(2, '0')
@@ -44,12 +50,11 @@ export default function CScanLabeler({ initial = null }) {
     const fileUrl = files[idx]?.url || ''
     const cur = files[idx] || null
 
-    const [meta, setMeta] = useState({
-        fiber: '', matrix: '', structure: '', method: '', code: '',
-        fiberGrade: '', matrixGrade: '', timestamp: '', probe_type: '', description: '',
-    })
+    const [meta, setMeta] = useState(EMPTY_META)
     const [defectType, setDefectType] = useState('Dl')   // 整图标签(code)
     const [parseText, setParseText] = useState('')        // 智能解析输入文字
+    const [reuseMeta, setReuseMeta] = useState(false)     // 复用上一张图的元数据（换图时不清空）
+    const reuseRef = useRef(false)                        // 同上（供上传副作用读取，避免重入）
     const [parsing, setParsing] = useState(false)
     const [imgSize, setImgSize] = useState(null)
     // 标尺比例尺：画一条已知 mm 的线段 → mm/px；随保存写入 meta.mm_per_px
@@ -139,12 +144,17 @@ export default function CScanLabeler({ initial = null }) {
         img.src = fileUrl
     }, [fileUrl])
 
-    // App 传入的初始图
+    // App 传入的初始图（新上传 → 默认清空元数据/解析文本；勾选「复用」则保留上一张）
     useEffect(() => {
         if (initial && initial.file) {
             const f = initial.file
             setFiles([{ name: initial.name || f.name, file: f, url: URL.createObjectURL(f), fromRaw: false }])
             setIdx(0)
+            if (!reuseRef.current) {
+                setMeta(EMPTY_META)
+                setDefectType('Dl')
+                setParseText('')
+            }
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [initial])
@@ -520,17 +530,24 @@ export default function CScanLabeler({ initial = null }) {
             <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
                 {/* 右：元数据 + 入库（固定宽放右；画布左移靠 order:1） */}
                 <div style={{ width: 460, flexShrink: 0, order: 2 }}>
-                    <Card size="small" title={<Space><PictureOutlined />元数据 & 入库</Space>}>
+                    <Card size="small" title={<Space><FormOutlined />元数据</Space>}>
                         {/* 智能解析：一段文字 → 自动填充 */}
                         <div style={{ marginBottom: 8 }}>
                             <Input.TextArea rows={9} value={parseText}
                                 onChange={e => setParseText(e.target.value)}
                                 placeholder={'粘贴文件名/描述文字(格式不限)，自动提取关键词：\n例：CF_BMI_BondSC_WRUT_Db_SYJ_20200826103050_T700_QY9511\n例：超声C扫_反射_板芯脱粘_5件蜂窝，5MHz水浸，项目SYJ…'}
                                 style={{ fontSize: 12 }} />
-                            <Button size="small" type="primary" ghost loading={parsing} icon={<ThunderboltOutlined />}
-                                onClick={parseMeta} style={{ marginTop: 4 }}>
-                                智能解析并填充
-                            </Button>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 4, justifyContent: 'space-between' }}>
+                                <Button size="small" type="primary" ghost loading={parsing} icon={<ThunderboltOutlined />}
+                                    onClick={parseMeta}>
+                                    智能解析并填充
+                                </Button>
+                                <Checkbox checked={reuseMeta}
+                                    onChange={e => { setReuseMeta(e.target.checked); reuseRef.current = e.target.checked }}
+                                    title="勾选后，上传下一张图时保留当前元数据不清空">
+                                    复用
+                                </Checkbox>
+                            </div>
                         </div>
 
                         <Divider style={{ margin: '4px 0 8px' }} />
@@ -540,7 +557,7 @@ export default function CScanLabeler({ initial = null }) {
                         <Collapse ghost size="small"
                             items={[{
                                 key: 'detail',
-                                label: <span style={{ fontSize: 13 }}>详细字段（可微调 · 已填 {filledMetaN}/{metaKeys.length}）</span>,
+                                label: <span style={{ fontSize: 13 }}>详细字段（已填 {filledMetaN}/{metaKeys.length}）</span>,
                                 children: (
                                     <Space direction="vertical" style={{ width: '100%' }} size={5}>
                                         {/* 行1 缺陷类型 */}
@@ -596,7 +613,7 @@ export default function CScanLabeler({ initial = null }) {
                             }]} />
                         <Button type="primary" block icon={<SaveOutlined />} loading={saving} onClick={openConfirm}
                             disabled={!cur || !imgSize} style={{ marginTop: 8 }}>
-                            保存入库（自动切片）
+                            保存入库
                         </Button>
                         {boxes.length === 0 &&
                             <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>当前无框 → 作为背景/无缺陷整图入库（仍切为背景 tile）</div>}
@@ -605,8 +622,7 @@ export default function CScanLabeler({ initial = null }) {
 
                 {/* 左：缺陷标注 画布（order:1 排最左，占主要宽度） */}
                 <div style={{ flex: 1, minWidth: 0, order: 1 }}>
-                    <Card size="small" title="缺陷标注"
-                        extra={<Tag color="blue">空白拖拽=画新框；点框选中→拖/缩放/删；标尺=拖线段定 mm/px</Tag>}
+                    <Card size="small" title={<Space><ScanOutlined />缺陷标注</Space>}
                         bodyStyle={{ padding: 8 }}>
                         <Space wrap style={{ marginBottom: 8 }}>
                             <Select size="small" style={{ width: 170 }} value={classSelValue}
