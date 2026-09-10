@@ -103,8 +103,47 @@ def build_dataset_block(dataset_info) -> str:
 - 基体类型：{", ".join(dataset_info['matrixes'])}
 - 结构类型：{", ".join(dataset_info['structures'])}
 - 检测方法：{", ".join(dataset_info['methods'])}
+- 项目：{", ".join(dataset_info.get('codes', []) or []) or "-"}
 
 请根据以上真实数据回答用户的问题。"""
+
+
+# ── CScan 数据库概况块 ──
+def build_cscan_dataset_block(summary, samples=None) -> str:
+    """构造 CScan 数据库概况块（图像样本库；与 AScan 的 .nde 数据集区分）。
+    summary: get_cscan_summary() 的返回；samples: 过滤后的样本文件名列表（可选）。"""
+    by_def = summary.get("by_defect", {}) or {}
+    defect_detail = "、".join(f"{k}({v}个)" for k, v in by_def.items())
+
+    def _join(key):
+        vals = summary.get(key) or []
+        return "、".join(vals) if vals else "-"
+
+    block = f"""
+
+## CScan 数据库概况（超声 C 扫图像样本库）
+这是与上面 .nde 信号数据集**不同的另一个数据库**：CScan 图像库（dataset/cscan_dataset/raw）。
+- 样本原图总数：{summary.get('total_files', 0)} 张
+- 缺陷类型分布：{defect_detail or '-'}
+- 纤维类型：{_join('fibers')}
+- 基体类型：{_join('matrixes')}
+- 结构类型：{_join('structures')}
+- 检测方法：{_join('methods')}
+- 项目：{_join('codes')}
+- 纤维牌号：{_join('fiber_grades')}
+- 基体牌号：{_join('matrix_grades')}
+"""
+    if samples is not None:
+        if samples:
+            block += f"\n匹配到的样本图（共 {len(samples)} 个，最多列 30 个）：\n"
+            block += "\n".join(f"- {s}" for s in samples[:30])
+            if len(samples) > 30:
+                block += f"\n… 其余 {len(samples) - 30} 个略"
+            block += "\n⚠ 用户询问的样本**确实存在**：请明确回答存在，并列出上面的样本文件名；**不得回答「没有」**。"
+        else:
+            block += "\n按用户给出的关键字**未匹配到样本图**（请在回答中说明未找到，不要臆造）。\n"
+    block += "\n请仅依据以上 CScan 图像库数据回答，不要把它与 .nde 的 AScan 数据集混为一谈。"
+    return block
 
 
 # ── 验收标准列表块 ──

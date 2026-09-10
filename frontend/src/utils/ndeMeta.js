@@ -1,5 +1,5 @@
 // .nde 文件名元数据解析与中文描述生成
-// 文件名格式: {纤维}_{基体}_{结构}_{方法}_{缺陷}_{型号}_{时间戳}_{纤维牌号}_{基体牌号}.nde
+// 文件名格式: {纤维}_{基体}_{结构}_{方法}_{缺陷}_{项目}_{时间戳}_{纤维牌号}_{基体牌号}.nde
 // 例: GFAF_EP_BondPP_WRUT_Db_Z109_20260820140045_FQW199_5224A.nde
 
 const STRUCTURE_LABELS = {
@@ -78,7 +78,7 @@ const orRaw = (map, code) => (map && map[code]) || (code && code !== '-' ? code 
 /** 根据元数据生成中文描述段落 */
 export function buildStructureDescription(meta) {
     if (!meta || !meta.structure || meta.structure === '-') {
-        return '当前文件未解析到结构信息，以下为通用平板示意（结构参数可在文件名中按「纤维_树脂_结构_方法_缺陷_型号_时间_纤维牌号_树脂牌号」顺序解析）。'
+        return '当前文件未解析到结构信息，以下为通用平板示意（结构参数可在文件名中按「纤维_树脂_结构_方法_缺陷_项目_时间_纤维牌号_树脂牌号」顺序解析）。'
     }
     const s = STRUCTURE_LABELS[meta.structure] || '平板'
     const head =
@@ -94,7 +94,7 @@ export function buildStructureDescription(meta) {
     return [
         head,
         `材料体系：${fiber} 增强 ${matrix}；纤维牌号 ${orRaw({}, meta.fiberGrade)}，树脂牌号 ${orRaw({}, meta.matrixGrade)}。`,
-        `检测方式：${orRaw(METHOD_LABELS, meta.method)}（型号 ${orRaw({}, meta.model)}）。`,
+        `检测方式：${orRaw(METHOD_LABELS, meta.method)}（项目 ${orRaw({}, meta.model)}）。`,
         meta.defect && meta.defect !== 'OK'
             ? `内置缺陷：${orRaw(DEFECT_LABELS, meta.defect)}（${meta.defect}）。`
             : '内置缺陷：无（OK）。',

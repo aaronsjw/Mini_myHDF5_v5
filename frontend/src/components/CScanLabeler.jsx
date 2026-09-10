@@ -28,7 +28,7 @@ const clamp01 = v => Math.max(0, Math.min(1, v))
 const REQ_FIELDS = [
     { k: 'fiber', label: '纤维' }, { k: 'matrix', label: '基体' },
     { k: 'structure', label: '结构' }, { k: 'method', label: '方法' },
-    { k: 'code', label: '型号' }, { k: 'fiberGrade', label: '纤维牌号' },
+    { k: 'code', label: '项目' }, { k: 'fiberGrade', label: '纤维牌号' },
     { k: 'matrixGrade', label: '基体牌号' }, { k: 'probe_type', label: '探头' },
 ]
 const fileStamp = d => `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`
@@ -525,7 +525,7 @@ export default function CScanLabeler({ initial = null }) {
                         <div style={{ marginBottom: 8 }}>
                             <Input.TextArea rows={9} value={parseText}
                                 onChange={e => setParseText(e.target.value)}
-                                placeholder={'粘贴文件名/描述文字(格式不限)，自动提取关键词：\n例：CF_BMI_BondSC_WRUT_Db_SYJ_20200826103050_T700_QY9511\n例：超声C扫_反射_板芯脱粘_5件蜂窝，5MHz水浸，型号SYJ…'}
+                                placeholder={'粘贴文件名/描述文字(格式不限)，自动提取关键词：\n例：CF_BMI_BondSC_WRUT_Db_SYJ_20200826103050_T700_QY9511\n例：超声C扫_反射_板芯脱粘_5件蜂窝，5MHz水浸，项目SYJ…'}
                                 style={{ fontSize: 12 }} />
                             <Button size="small" type="primary" ghost loading={parsing} icon={<ThunderboltOutlined />}
                                 onClick={parseMeta} style={{ marginTop: 4 }}>
@@ -579,10 +579,10 @@ export default function CScanLabeler({ initial = null }) {
                                                 <MetaField label="方法" labelWidth={64} v={meta.method} onChange={v => setMeta({ ...meta, method: v })} opts={['WRUT', 'WPUT', 'PAUT', 'AUT']} />
                                             </div>
                                         </div>
-                                        {/* 行5 型号 + 探头 */}
+                                        {/* 行5 项目 + 探头 */}
                                         <div style={{ display: 'flex', gap: 8, width: '100%' }}>
                                             <div style={{ flex: 1, minWidth: 0 }}>
-                                                <MetaField label="型号" labelWidth={64} placeholder="如 SYJ" v={meta.code} onChange={v => setMeta({ ...meta, code: v })} />
+                                                <MetaField label="项目" labelWidth={64} placeholder="如 SYJ" v={meta.code} onChange={v => setMeta({ ...meta, code: v })} />
                                             </div>
                                             <div style={{ flex: 1, minWidth: 0 }}>
                                                 <MetaField label="探头" labelWidth={64} placeholder="如 5MHz water immersion" v={meta.probe_type} onChange={v => setMeta({ ...meta, probe_type: v })} />

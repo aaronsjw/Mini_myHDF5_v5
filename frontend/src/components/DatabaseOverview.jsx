@@ -31,7 +31,7 @@ const FIELD_LABELS = {
     structure: '结构',
     method: '检测方法',
     defect: '缺陷类型',
-    model: '型号',
+    model: '项目',
     timestamp: '时间戳'
 }
 
@@ -119,7 +119,7 @@ export default function DatabaseOverview({
         { k: 'defectType', label: '缺陷类型', kind: 'select', opts: DEFECT_OPTS },
         { k: 'structure', label: '结构', kind: 'select', opts: STRUCT_OPTS.map(v => ({ value: v, label: v })) },
         { k: 'method', label: '方法', kind: 'select', opts: METHOD_OPTS.map(v => ({ value: v, label: v })) },
-        { k: 'code', label: '型号', kind: 'input' },
+        { k: 'code', label: '项目', kind: 'input' },
         { k: 'fiber', label: '纤维', kind: 'select', opts: FIBER_OPTS.map(v => ({ value: v, label: v })) },
         { k: 'matrix', label: '基体', kind: 'select', opts: MATRIX_OPTS.map(v => ({ value: v, label: v })) },
         { k: 'fiberGrade', label: '纤维牌号', kind: 'input' },
@@ -216,7 +216,7 @@ export default function DatabaseOverview({
                 return <Tag color={info.color}>{text}</Tag>
             }
         },
-        { title: '型号', dataIndex: 'model', key: 'model', width: 80 },
+        { title: '项目', dataIndex: 'model', key: 'model', width: 80 },
         ...extraColumns,
         ...(manageBase ? [{
             title: '操作', key: 'ops', width: 120,
@@ -224,7 +224,8 @@ export default function DatabaseOverview({
                 const stem = String(r.filename).replace(/\.[^.]+$/, '')
                 return (
                     <Space size={4}>
-                        <Button size="small" onClick={() => openEdit(stem)}>编辑</Button>
+                        <Button size="small" onClick={() => openEdit(stem)}
+                            style={{ color: '#52c41a', borderColor: '#52c41a' }}>编辑</Button>
                         <Button size="small" danger onClick={() => askDelete(stem, r.filename)}>删除</Button>
                     </Space>
                 )
@@ -331,7 +332,7 @@ export default function DatabaseOverview({
                                 onChange={e => setEditVals(p => ({ ...p, description: e.target.value }))} />
                         </div>
                         <div style={{ gridColumn: '1 / -1', color: '#aaa', fontSize: 12 }}>
-                            命名字段（缺陷/结构/方法/型号/纤维/基体/牌号）改动会同步改名并重新切片；时间戳留空沿用原名。
+                            命名字段（缺陷/结构/方法/项目/纤维/基体/牌号）改动会同步改名并重新切片；时间戳留空沿用原名。
                         </div>
                     </div>
                 </Spin>

@@ -63,7 +63,7 @@ from prompts import (
     build_system_prompt, build_no_file_prompt,
     build_dataset_block, build_acceptance_index_block, build_acceptance_result_block,
     build_dispute_block, build_dispatch_block, build_local_model_content,
-    build_cscan_block,
+    build_cscan_block, build_cscan_dataset_block,
 )
 
 ## 请求体模型
@@ -648,6 +648,7 @@ def get_dataset_summary():
     matrixes = set()
     structures = set()
     methods = set()
+    codes = set()          # 第 6 段：项目
     total = 0
     by_defect = {}
 
@@ -669,6 +670,7 @@ def get_dataset_summary():
                 structures.add(m.group(3))
                 methods.add(m.group(4))
                 defect_types.add(m.group(5))
+                codes.add(m.group(6))       # 项目
             count += 1
         by_defect[defect_dir] = count
         total += count
@@ -681,6 +683,7 @@ def get_dataset_summary():
         "matrixes": sorted(matrixes),
         "structures": sorted(structures),
         "methods": sorted(methods),
+        "codes": sorted(codes),
     }
 
 # 生成数据集的概要统计
@@ -695,7 +698,7 @@ def dataset_overview():
         "files": []
     }
 
-    # 命名规则: {纤维类型}_{基体类型}_{结构}_{检测方法}_{缺陷类型}_{型号}_{时间戳}.nde
+    # 命名规则: {纤维类型}_{基体类型}_{结构}_{检测方法}_{缺陷类型}_{项目}_{时间戳}.nde
     pattern = re.compile(
         r"^(\w+)_(\w+)_(\w+)_(\w+)_(\w+)_(\w+)_(\d{14})_(.+)\.nde$"
     )
@@ -781,6 +784,7 @@ def get_cscan_summary():
         return None
 
     defect_types, fibers, matrixes, structures, methods = set(), set(), set(), set(), set()
+    codes, fiber_grades, matrix_grades = set(), set(), set()
     total, by_defect = 0, {}
 
     for fname in sorted(os.listdir(base)):
@@ -793,6 +797,10 @@ def get_cscan_summary():
         if meta.get("matrix"):     matrixes.add(meta["matrix"])
         if meta.get("structure"):  structures.add(meta["structure"])
         if meta.get("method"):     methods.add(meta["method"])
+        for key, bucket in (("code", codes), ("fiberGrade", fiber_grades), ("matrixGrade", matrix_grades)):
+            v = meta.get(key)
+            if v and v != "NaN":
+                bucket.add(v)
         by_defect[defect] = by_defect.get(defect, 0) + 1
         total += 1
 
@@ -804,7 +812,112 @@ def get_cscan_summary():
         "matrixes": sorted(matrixes),
         "structures": sorted(structures),
         "methods": sorted(methods),
+        "codes": sorted(codes),
+        "fiber_grades": sorted(fiber_grades),
+        "matrix_grades": sorted(matrix_grades),
     }
+
+
+# 问数据库时忽略的通用词（不当关键字）
+_DB_STOP_TOKENS = {
+    "cscan", "ascan", "scan", "csan", "database", "db", "data", "the", "and",
+    "for", "with", "about", "list", "show", "project", "projects", "sample",
+    "samples", "file", "files", "image", "images", "nde", "png", "bmp", "jpg", "jpeg",
+}
+
+
+def _question_tokens(question: str) -> list:
+    """从问题里抽字母数字关键字（长度≥3），去掉通用词。如 'Z109'、'T1100'。"""
+    toks = [t.lower() for t in re.findall(r"[A-Za-z0-9][A-Za-z0-9._-]{2,}", question)]
+    return [t for t in toks if t not in _DB_STOP_TOKENS]
+
+
+def _ascan_samples_matching(tokens):
+    """按关键字过滤 AScan(.nde) 数据集文件名。tokens 为空 → None。"""
+    if not tokens:
+        return None
+    base = os.path.join(os.path.dirname(__file__), "..", "dataset", "ascan_dataset")
+    hits = []
+    if os.path.isdir(base):
+        for defect_dir in sorted(os.listdir(base)):
+            d = os.path.join(base, defect_dir)
+            if not os.path.isdir(d):
+                continue
+            for fn in sorted(os.listdir(d)):
+                if fn.lower().endswith(".nde") and any(t in fn.lower() for t in tokens):
+                    hits.append(f"{defect_dir}/{fn}")
+    return hits
+
+
+def _cscan_samples_matching(question: str):
+    """按问题里出现的字母数字关键字（如项目 T1100）过滤 CScan 样本文件名。
+    无有效关键字 → 返回 None（表示不按关键字过滤）。"""
+    toks = _question_tokens(question)
+    if not toks:
+        return None
+    hits = []
+    if os.path.isdir(CSCAN_RAW_DIR):
+        for fn in sorted(os.listdir(CSCAN_RAW_DIR)):
+            if os.path.splitext(fn)[1].lower() not in CSCAN_IMAGE_EXTS:
+                continue
+            meta = _read_cscan_sidecar(os.path.splitext(fn)[0], CSCAN_RAW_DIR)
+            hay = (fn + " " + json.dumps(meta, ensure_ascii=False)).lower()
+            if any(t in hay for t in toks):
+                hits.append(fn)
+    return hits
+
+
+def _cscan_db_block(question: str) -> str:
+    """拼 CScan 数据库概况块（含按关键字匹配的样本列表）。"""
+    summ = get_cscan_summary()
+    if not summ:
+        return ("\n\n## CScan 数据库\nCScan 图像库当前为空（dataset/cscan_dataset/raw 无样本图），"
+                "可在『数据标注』模块上传 C 扫图标注入库。")
+    return build_cscan_dataset_block(summ, _cscan_samples_matching(question))
+
+
+def _all_db_search_block(question: str) -> str:
+    """全库检索：按问题关键字同时查 AScan(.nde) 与 CScan(图像) 两个库，命中即列出。
+    解决"未指明哪个库"应按整库查找的问题。"""
+    toks = _question_tokens(question)
+    if not toks:
+        return ""
+    a_hits = _ascan_samples_matching(toks) or []
+    c_hits = _cscan_samples_matching(question) or []
+
+    def _dist(items, keyfn, limit=12):
+        d = {}
+        for it in items:
+            k = keyfn(it)
+            d[k] = d.get(k, 0) + 1
+        parts = sorted(d.items(), key=lambda kv: -kv[1])
+        s = "、".join(f"{k} {v} 个" for k, v in parts[:limit])
+        if len(parts) > limit:
+            s += f" …（共 {len(parts)} 类）"
+        return s
+
+    lines = [f"\n\n## 数据库检索结果（关键字：{'、'.join(toks)}）"]
+    lines.append("用户未限定库，已同时检索 AScan(.nde) 与 CScan(图像) 两个库：")
+    if a_hits:
+        lines.append(f"\nAScan(.nde) 命中 {len(a_hits)} 个；按缺陷类型分布：{_dist(a_hits, lambda h: h.split('/')[0])}")
+        lines += [f"- {h}" for h in a_hits[:30]]
+        if len(a_hits) > 30:
+            lines.append(f"…（仅列前 30 个，共 {len(a_hits)} 个）")
+    else:
+        lines.append("\nAScan(.nde)：无匹配")
+    if c_hits:
+        lines.append(f"\nCScan(图像) 命中 {len(c_hits)} 个；按缺陷类型分布："
+                     f"{_dist(c_hits, lambda n: (_read_cscan_sidecar(os.path.splitext(n)[0], CSCAN_RAW_DIR).get('defectType') or '?'))}")
+        lines += [f"- {h}" for h in c_hits[:30]]
+        if len(c_hits) > 30:
+            lines.append(f"…（仅列前 30 个，共 {len(c_hits)} 个）")
+    else:
+        lines.append("\nCScan(图像)：无匹配")
+    if a_hits or c_hits:
+        lines.append("⚠ 确有匹配：请明确列出上面的样本，**不得回答「没有/未找到」**。")
+    else:
+        lines.append("两个库均无匹配（可如实说明未找到）。")
+    return "\n".join(lines)
 
 
 @app.get("/cscan_dataset")
@@ -1256,17 +1369,19 @@ def cscan_raw_update(stem: str, req: dict):
 
     for d in (CSCAN_IMAGES_DIR, CSCAN_LABELS_DIR, CSCAN_META_DIR):
         os.makedirs(d, exist_ok=True)
-    dst = os.path.join(CSCAN_RAW_DIR, new_stem + ext)
-    shutil.copy2(img, dst)
+    # 边车：同名则原地覆盖
     with open(os.path.join(CSCAN_RAW_DIR, new_stem + ".json"), "w", encoding="utf-8") as f:
         json.dump(m, f, ensure_ascii=False, indent=2)
-    src_txt = os.path.join(CSCAN_RAW_DIR, stem + ".txt")
-    dst_txt = os.path.join(CSCAN_RAW_DIR, new_stem + ".txt")
-    if os.path.isfile(src_txt):
-        shutil.copy2(src_txt, dst_txt)
-    else:
-        with open(dst_txt, "w", encoding="utf-8") as f:
-            pass
+    # 仅改名时才复制原图与框文件（同名复制会 SameFileError）
+    if new_stem != stem:
+        shutil.copy2(img, os.path.join(CSCAN_RAW_DIR, new_stem + ext))
+        src_txt = os.path.join(CSCAN_RAW_DIR, stem + ".txt")
+        dst_txt = os.path.join(CSCAN_RAW_DIR, new_stem + ".txt")
+        if os.path.isfile(src_txt):
+            shutil.copy2(src_txt, dst_txt)
+        else:
+            with open(dst_txt, "w", encoding="utf-8") as f:
+                pass
     slice_res = slice_raw_image(new_stem, m, CSCAN_RAW_DIR,
                                 CSCAN_IMAGES_DIR, CSCAN_LABELS_DIR, CSCAN_META_DIR,
                                 read_classes(CSCAN_CLASSES_TXT))
@@ -1492,9 +1607,28 @@ async def chat_ask(req: dict):
     else:
         # 无文件：通用助手指令
         system_prompt = build_no_file_prompt()
-    # 如果询问数据库信息，追加数据集描述
-    if dataset_info:
+    # ── 数据集上下文判定：CScan 数据库问题 vs AScan(.nde) 数据集问题 ──
+    cscan_context = req.get("cscan_context")
+    cscan_keywords = ['cscan', 'c扫', 'c扫描', 'c-scan', 'c图', 'c扫图', 'c 扫']
+    is_cscan_q = any(k in question.lower() for k in cscan_keywords)
+    db_keywords = ['数据库', '样本', '数据', '有哪些', '有哪些数据', '介绍', '情况', '概览', '库']
+    is_db_q = any(k in question for k in db_keywords)
+
+    # 询问数据库信息：只要问题涉及 CScan，就不再注入 AScan(.nde) 数据集块；
+    # CScan 数据库类问题额外注入 CScan 图像库概况（含关键字匹配样本）
+    if dataset_info and not is_cscan_q:
         system_prompt += build_dataset_block(dataset_info)
+    if is_cscan_q and is_db_q:
+        try:
+            system_prompt += _cscan_db_block(question)
+        except Exception as e:
+            system_prompt += f"\n\n## CScan 数据库\n读取 CScan 图像库时出错：{e}"
+    # 问题里含具体关键字（如项目 Z109）且是数据库类问题 → 全库检索（AScan+CScan 都查）
+    if is_db_q:
+        try:
+            system_prompt += _all_db_search_block(question)
+        except Exception:
+            pass
 
     # 验收标准相关查询（对话式）
     acceptance_keywords = ['验收', '验收标准', '验收文件', '超标', '合格判定', '验收判定', '标准文件']
@@ -1546,10 +1680,8 @@ async def chat_ask(req: dict):
     if acceptance_ctx:
         system_prompt += acceptance_ctx
 
-    # C-Scan 上下文（CScan 面板"发送给AI评估"带入；关键词命中时注入结果块）
-    cscan_context = req.get("cscan_context")
-    cscan_keywords = ['C扫', 'cscan', 'C扫描', 'C-Scan', 'C图', 'C 扫', 'C扫图']
-    if any(k in question for k in cscan_keywords):
+    # C-Scan 检测上下文（CScan 面板"发送给AI评估"带入；关键词命中时注入结果块）
+    if is_cscan_q:
         if cscan_context:
             system_prompt += build_cscan_block(cscan_context)
             acc = cscan_context.get("acceptance")
@@ -1559,7 +1691,8 @@ async def chat_ask(req: dict):
                         acc, cscan_context.get("authoritative_defect_type") or "")
                 except Exception:
                     pass
-        else:
+        elif not is_db_q:
+            # 数据库类问题已由 CScan 图像库概况块回答，这里不再说"没有上下文"以免误导
             system_prompt += ("\n\n用户询问 C-Scan 相关内容，但当前没有 C-Scan 检测上下文。"
                               "可引导用户在『数据标注』模块上传 C 扫图完成标注入库；"
                               "图像自动识别与送AI评估能力后续开放，暂以知识性解答为主。")
@@ -2092,13 +2225,13 @@ def cscan_meta_parse(req: dict):
             if not out.get(key):
                 out[key] = _pick_zh(masked, table)
 
-        # ③ 显式标签取号：型号/纤维牌号/基体牌号/纤维/基体 后直接跟的令牌
-        #    （即使 raw 词典里没见过也能解析，如 "纤维牌号ZA55GC"）
+        # ③ 显式标签取号：项目/纤维牌号/基体牌号/纤维/基体 后直接跟的令牌
+        #    （即使 raw 词典里没见过也能解析，如 "纤维牌号ZA55GC"；"型号"作旧写法兼容）
         for key, label in (("matrixGrade", "基体牌号"), ("fiberGrade", "纤维牌号"),
-                           ("code", "型号"), ("matrix", "基体"), ("fiber", "纤维")):
+                           ("code", "(?:项目|型号)"), ("matrix", "基体"), ("fiber", "纤维")):
             if out.get(key):
                 continue
-            m = re.search(re.escape(label) + r"\s*[：:为是]?\s*([A-Za-z0-9][A-Za-z0-9._-]*)", text)
+            m = re.search(label + r"\s*[：:为是]?\s*([A-Za-z0-9][A-Za-z0-9._-]*)", text)
             if m:
                 out[key] = m.group(1)
 
@@ -2122,7 +2255,7 @@ def cscan_meta_parse(req: dict):
                 if code:
                     out["method"] = code
 
-        # ④ raw 已有值词典扫描（型号/牌号/材料等已知值；避免误匹配太短令牌）
+        # ④ raw 已有值词典扫描（项目/牌号/材料等已知值；避免误匹配太短令牌）
         vocab = _cscan_vocab()
         for key, values in vocab.items():
             if out.get(key):
