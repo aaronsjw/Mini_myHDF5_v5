@@ -279,7 +279,7 @@ export default function CScanTrainPanel({ active }) {
                                     <Col><Statistic title="运行目录" value={runName} /></Col>
                                 </Row>
                                 <div style={{ marginTop: 8, color: '#888', fontSize: 12 }}>
-                                    结果图与更多产物经 <Tag>dataset/cscan_dataset/runs/{runName}</Tag> 提供
+                                    结果图与更多产物经 <Tag>backend/storage/cscan/runs/{runName}</Tag> 提供
                                 </div>
                             </Card>
 

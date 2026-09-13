@@ -20,7 +20,7 @@ import re
 from datetime import datetime
 
 ## 模型训练
-from trainer import (
+from ascan.trainer import (
     preview_dataset,        # 预览数据集
     start_train,            # 启动训练
     get_status,             # 获取训练状态
@@ -36,30 +36,30 @@ from trainer import (
 )
 
 ## 信号处理
-from signal_analysis import analyze_signal, load_nde_meta, analyze_waveform_per_frame, analyze_waveform_keypoints
+from ascan.signal_analysis import analyze_signal, load_nde_meta, analyze_waveform_per_frame, analyze_waveform_keypoints
 ## 大模型交互
-from deepseek_client import chat_stream
+from ascan.deepseek_client import chat_stream
 ## 验收判定
-from acceptance_checker import AcceptanceChecker
+from ascan.acceptance_checker import AcceptanceChecker
 ## CScan YOLO 推理
-from cscan_yolo import (
+from cscan.yolo import (
     ultralytics_available, list_cscan_models, analyze_cscan,
     build_cscan_features, V5_ABBR_TO_ZH,
 )
 ## CScan 原图入库 / 标注（切片与类表）
-from cscan_ingest import (
+from cscan.ingest import (
     read_classes, add_class, normalize_stem, slice_raw_image,
     find_raw_image, parse_yolo, CODE_ZH,
 )
 ## CScan YOLO 训练 / 验证评估（web 后台任务）
-from cscan_trainer import (
+from cscan.trainer import (
     start_cscan_train, get_cscan_train_status, get_cscan_train_result,
     start_cscan_eval, get_cscan_eval_status, get_cscan_eval_result,
     list_cscan_model_meta, RUNS_DIR, MODELS_DIR as CSCAN_MODELS_DIR_T,
     PRETRAINED as CSCAN_PRETRAINED,
 )
 ## 提示词模板
-from prompts import (
+from ascan.prompts import (
     build_system_prompt, build_no_file_prompt,
     build_dataset_block, build_acceptance_index_block, build_acceptance_result_block,
     build_dispute_block, build_dispatch_block, build_local_model_content,
@@ -1016,7 +1016,7 @@ def cscan_models():
     except Exception as e:
         return {"available": ultralytics_available(), "models": [], "note": str(e)}
     note = "ultralytics 未安装" if not ultralytics_available() else \
-        ("未找到模型权重（backend/cscan_models 为空）" if not models else "")
+        ("未找到模型权重（backend/storage/cscan/models 为空）" if not models else "")
     return {"available": ultralytics_available(), "models": models, "note": note}
 
 
@@ -1880,7 +1880,7 @@ def chat_report(req: dict):
 def chat_report_download(report_id: str):
     """下载检测报告"""
     import glob as gglob
-    report_dir = os.path.join(os.path.dirname(__file__), "reports")
+    report_dir = os.path.join(os.path.dirname(__file__), "storage", "reports")
     pattern = os.path.join(report_dir, f"{report_id}.docx")
     matches = gglob.glob(pattern)
     if not matches:
@@ -2015,7 +2015,7 @@ def acceptance_suggest_standard(req: dict):
 # ══════════════════════════════════════════════════
 # region 缺陷争议处理
 
-DISPUTES_DIR = os.path.join(os.path.dirname(__file__), "disputes")
+DISPUTES_DIR = os.path.join(os.path.dirname(__file__), "storage", "disputes")
 os.makedirs(DISPUTES_DIR, exist_ok=True)
 
 # 提交争议
@@ -2219,7 +2219,7 @@ def cscan_train_models():
 
 @app.delete("/cscan/train/models/{model_name}")
 def cscan_train_delete_model(model_name: str):
-    """删除 backend/cscan_models 下模型（.pt + .json）。"""
+    """删除 backend/storage/cscan/models 下模型（.pt + .json）。"""
     name = os.path.basename(model_name)
     stem = os.path.splitext(name)[0]
     removed = []

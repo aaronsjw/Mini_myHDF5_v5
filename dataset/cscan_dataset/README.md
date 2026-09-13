@@ -14,14 +14,12 @@ dataset/cscan_dataset/
 ├── meta/                     # 边车 JSON，与 images 同名配对
 │                             #   {method, structure, defect, damage_type, probe, wave, part, source_raw}
 ├── raw/                      # E盘原始数据归档（原始图 + .dat，保留来源文件夹层级）
-├── tools/                    # 脚本：raw→切分→重命名→标注重映射→增广→划分
-│   └── split_dataset.py      # 训练时按原图分组随机划分，生成 train.txt/val.txt + dataset.yaml
 ├── dataset.yaml              # YOLO 配置（每次训练由 split_dataset.py 生成）
 ├── codes.json                # class_id ↔ v5缺陷码 ↔ 中文 映射表（自动生成）
 └── README.md
 ```
 
-> **没有预划分的 train/val 目录**。所有处理后的片段单一存放，训练时用 `tools/split_dataset.py` 按「原图」分组随机 80/20，像 AScan 的 train_test_split 一样每次随机。详见「第 5 节 训练时划分」。
+> **没有预划分的 train/val 目录**。所有处理后的片段单一存放，训练时用 `backend/cscan/tools/split_dataset.py` 按「原图」分组随机 80/20，像 AScan 的 train_test_split 一样每次随机。详见「第 5 节 训练时划分」。
 
 ## 2. 设计决策（2026-08-28 已定）
 
@@ -98,8 +96,8 @@ train 组（~59 原图的全部片段）          val 组（~15 原图的全部�
 ## 6. 待办
 
 - [ ] E盘原始数据导入 raw/（含 .dat 归档，保留来源文件夹层级）
-- [ ] tools/ 脚本：raw 图切分 + 按命名规则重命名（片段→ images/）
+- [ ] backend/cscan/tools/slice_remap.py：raw 图切分 + 按命名规则重命名（片段→ images/）
 - [ ] 缺陷框标注（并入 v5 缺陷码）
 - [ ] 边车 JSON 生成（含 source_raw 分组键）
-- [ ] tools/split_dataset.py：按原图分组随机划分 + 生成 dataset.yaml/codes.json
+- [ ] backend/cscan/tools/split_dataset.py：按原图分组随机划分 + 生成 dataset.yaml/codes.json
 - [ ] 接入 v5 后端 CScan 管线（cscan_yolo.py，见 `超声CScan功能增加.md`）

@@ -53,7 +53,7 @@ dataset/cscan_dataset/raw/*
 !dataset/cscan_dataset/raw/labels.txt
 !dataset/cscan_dataset/raw/classes.txt
 dataset/cscan_dataset/超声C扫/
-dataset/cscan_dataset/runs/
+backend/storage/cscan/runs/
 dataset/cscan_dataset/train.txt
 dataset/cscan_dataset/val.txt
 dataset/cscan_dataset/labels.cache
@@ -61,10 +61,17 @@ dataset/cscan_dataset/yolo11n.pt
 dataset/cscan_dataset/yolov8n.pt
 
 # CScan 后端推理权重(运行时自动拷贝, 不入库)
-backend/cscan_models/
+backend/storage/cscan/models/
 
 # 报告模板测试杂物
-backend/reports/_demo_*
+backend/storage/reports/_demo_*
 # VT 内窥镜样本（数据不入库，仅保留占位）
 dataset/vt_dataset/raw/*
 !dataset/vt_dataset/raw/.gitkeep
+
+# backend 运行期产物（与代码分离，不入库）
+backend/storage/ascan/models/
+backend/storage/reports/
+
+# ultralytics 默认输出目录（根级，随手跑 YOLO 会生成）
+/runs/
