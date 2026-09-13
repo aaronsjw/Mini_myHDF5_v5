@@ -20,15 +20,24 @@
 Mini_myHDF5_v5/
 ├── backend/                              # Python 后端 (FastAPI)
 │   ├── main.py                           # API 入口 + 路由
-│   ├── trainer.py                        # 模型训练 + 报告生成 + 委托单解析
-│   ├── signal_analysis.py                # 超声信号特征提取
-│   ├── acceptance_checker.py             # 验收标准检查
-│   ├── deepseek_client.py                # DeepSeek LLM 客户端
+│   ├── ascan/                            # 超声 AScan（信号）域
+│   │   ├── trainer.py                    # 模型训练 + 报告生成 + 委托单解析
+│   │   ├── signal_analysis.py            # 超声信号特征提取
+│   │   ├── acceptance_checker.py         # 验收标准检查
+│   │   ├── prompts.py                    # AI 提示词模板
+│   │   └── deepseek_client.py            # DeepSeek LLM 客户端
+│   ├── cscan/                            # 超声 CScan（图像）域
+│   │   ├── ingest.py                     # 原图入库 + 切片
+│   │   ├── yolo.py                       # YOLO 推理（切块 + 尺寸换算）
+│   │   ├── trainer.py                    # YOLO 训练 / 评估
+│   │   └── tools/                        # 离线脚本（切分/划分/续训）
+│   ├── storage/                          # 运行期产物与数据（不入库）
+│   │   ├── ascan/models/                 # AScan 模型 (.pkl/.pt/.json)
+│   │   ├── cscan/{models,runs}/          # CScan 模型 / 训练产物
+│   │   ├── reports/                      # 自动生成的检测报告 (.docx)
+│   │   └── disputes/                     # 争议记录
 │   ├── requirements.txt                  # Python 依赖
-│   ├── .env                              # 环境变量（API Key 等）
-│   ├── models/                           # 训练好的模型文件 (.pt/.pkl/.json)
-│   ├── reports/                          # 自动生成的检测报告 (.docx)
-│   └── disputes/                         # 争议记录
+│   └── .env                              # 环境变量（API Key 等）
 │
 ├── frontend/                             # React 前端 (Vite)
 │   ├── src/
@@ -44,7 +53,6 @@ Mini_myHDF5_v5/
 │   │   │   ├── TestingPanel.jsx          # 模型测试面板
 │   │   │   ├── InspectPanel.jsx          # 数据检测面板
 │   │   │   └── DatabaseOverview.jsx      # 数据库总览
-│   │   └── 草稿/                         # 历史备份草稿
 │   ├── public/                           # 静态资源
 │   ├── index.html
 │   ├── package.json
@@ -67,25 +75,21 @@ Mini_myHDF5_v5/
 │       ├── labels/                       # YOLO txt 标签
 │       ├── meta/                         # 边车 JSON 元数据
 │       ├── raw/                          # 原始 C 扫数据归档 (含 .dat)
-│       ├── tools/                        # 数据准备脚本（含 split_dataset.py）
 │       └── README.md                     # CScan 数据集设计说明
 │
 ├── standards/                            # 检测标准文档
 │   ├── GJB/                              # 国军标 (GJB 1038.1A-2004)
 │   └── HB/                               # 航空标准 (HB 7224-2020)
 │
-├── templates/                            # Word 模板
-│   ├── 超声检测报告.docx                  # 检测报告模板（含占位符）
-│   └── 委托单模板.doc                     # 委托单模板
-│
-├── samples/                              # 参考示例
-│   ├── WS-2022-1998J委托单.doc            # 委托单填写示例
-│   └── WS-2022-1998J报告.doc              # 报告生成示例
+├── templates/                            # Word 模板与示例
+│   ├── 超声检测报告.docx                  # 检测报告模板（含 {$…} 占位符，代码使用）
+│   ├── 委托单模板.doc                     # 委托单模板
+│   └── examples/                         # 参考示例
+│       ├── WS-2022-1998J委托单.doc        # 委托单填写示例
+│       └── WS-2022-1998J报告.doc          # 报告生成示例
 │
 ├── sci.md                                # SCI 论文思路与方向规划
 ├── update_nde.py                         # .nde 文件格式更新工具
-├── 研究报告.md                            # 研究报告（精简版）
-├── 研究报告2.md                           # 研究报告（完整版）
 ├── 验收文件.md                            # 验收文件
 ├── 会话记录_20260611-0614.md              # 开发会话记录
 ├── .gitignore
