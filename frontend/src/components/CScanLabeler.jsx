@@ -9,7 +9,7 @@ import {
 import {
     DeleteOutlined, UndoOutlined, SaveOutlined,
     ZoomInOutlined, ZoomOutOutlined, AimOutlined, FormOutlined, ThunderboltOutlined,
-    CheckOutlined, CloseOutlined, ScanOutlined,
+    CheckOutlined, CloseOutlined, ScanOutlined, LeftOutlined, RightOutlined,
 } from '@ant-design/icons'
 import axios from 'axios'
 
@@ -42,16 +42,18 @@ const fileStamp = d => `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getD
 let UID = 1
 const nid = () => UID++
 
-export default function CScanLabeler({ initial = null }) {
+export default function CScanLabeler({ initial = null, onCurrentChange = null }) {
     const [classList, setClassList] = useState([])       // [{id, code, zh}]
     const [currentClassId, setCurrentClassId] = useState(0)
     const [files, setFiles] = useState([])               // [{name, file, url, fromRaw}]
     const [idx, setIdx] = useState(0)
+    const [savedNames, setSavedNames] = useState({})     // 本次会话已入库的文件名 → true
+    const [snapshots, setSnapshots] = useState({})       // 已入库图的快照 {boxes, meta, calib}（切回时恢复）
+    const [rootDir, setRootDir] = useState('')           // 文件夹上传时的绝对根（由 C:\fakepath 解析）
     const fileUrl = files[idx]?.url || ''
     const cur = files[idx] || null
 
     const [meta, setMeta] = useState(EMPTY_META)
-    const [defectType, setDefectType] = useState('Dl')   // 整图标签(code)
     const [parseText, setParseText] = useState('')        // 智能解析输入文字
     const [reuseMeta, setReuseMeta] = useState(false)     // 复用上一张图的元数据（换图时不清空）
     const reuseRef = useRef(false)                        // 同上（供上传副作用读取，避免重入）
@@ -144,26 +146,47 @@ export default function CScanLabeler({ initial = null }) {
         img.src = fileUrl
     }, [fileUrl])
 
-    // App 传入的初始图（新上传 → 默认清空元数据/解析文本；勾选「复用」则保留上一张）
+    // App 传入的会话：单张或文件夹批量（新会话 → 回到首张、清空「已入库」标记）
     useEffect(() => {
-        if (initial && initial.file) {
-            const f = initial.file
-            setFiles([{ name: initial.name || f.name, file: f, url: URL.createObjectURL(f), fromRaw: false }])
-            setIdx(0)
-            if (!reuseRef.current) {
-                setMeta(EMPTY_META)
-                setDefectType('Dl')
-                setParseText('')
-            }
+        if (!initial) return
+        const imgs = (initial.images && initial.images.length)
+            ? initial.images
+            : (initial.file ? [{ file: initial.file, name: initial.name || initial.file.name }] : [])
+        if (!imgs.length) return
+        setFiles(imgs.map(it => ({
+            name: it.name || it.file.name,
+            file: it.file,
+            url: URL.createObjectURL(it.file),
+            fromRaw: false,
+        })))
+        // 记录本次会话的文件夹绝对根（浏览器只给 C:\fakepath\... 形式的相对路径）
+        const rel0 = (initial.images && initial.images[0]) ? (initial.images[0].name || '') : ''
+        setRootDir(rel0.includes('\\') ? rel0.split('\\')[0] : (rel0.includes('/') ? rel0.split('/')[0] : ''))
+        setSavedNames({})
+        setSnapshots({})
+        setIdx(0)
+        if (!reuseRef.current) {
+            setMeta(EMPTY_META)
+            setParseText('')
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [initial])
 
-    // 切图：重置框与标尺
+    // 切图：已入库的图恢复快照（框/元数据/标尺）；否则清空
     useEffect(() => {
-        setBoxes([]); setSelected(-1)
-        setCalib(null); setDraft(null); setRulerOpen(false); setRulerSeg(null); setRulerMm(null)
-    }, [fileUrl])
+        const snap = cur && snapshots[cur.name]
+        if (snap) {
+            setBoxes((snap.boxes || []).map(b => ({ ...b, uid: nid() })))
+            setMeta({ ...EMPTY_META, ...(snap.meta || {}) })
+            setCalib(snap.calib || null)
+        } else {
+            setBoxes([])
+            setCalib(null)
+        }
+        setSelected(-1)
+        setDraft(null); setRulerOpen(false); setRulerSeg(null); setRulerMm(null)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [fileUrl, snapshots])
 
     // 布局换算
     const layout = () => {
@@ -390,8 +413,51 @@ export default function CScanLabeler({ initial = null }) {
         setBoxes(prev => prev.filter((_, i) => i !== selected))
         setSelected(-1)
     }
-    // 无框 → 整图为好区/背景(OK)，不再沿用默认缺陷类型
-    const effectiveDefect = boxes.length ? defectType : 'OK'
+    const goPrev = () => setIdx(i => Math.max(0, i - 1))
+    const goNext = () => setIdx(i => Math.min(files.length - 1, i + 1))
+    // 切图时若本地无快照 → 向后端查该图是否已入库（跨会话还原标注框与元数据）
+    useEffect(() => {
+        if (!cur) return
+        if (snapshots[cur.name]) return          // 本次会话已存快照，交给上面的恢复逻辑
+        let cancelled = false
+        axios.get(`${API}/cscan/raw/lookup`, { params: { name: cur.name } })
+            .then(r => {
+                if (cancelled) return
+                const d = r.data || {}
+                if (!d.found) return
+                const m = { ...EMPTY_META, ...(d.meta || {}) }
+                const mapped = (d.yolo || []).map(b => ({
+                    uid: nid(), class_id: b.class_id,
+                    x1: b.cx - b.w / 2, y1: b.cy - b.h / 2,
+                    x2: b.cx + b.w / 2, y2: b.cy + b.h / 2,
+                }))
+                setBoxes(mapped)
+                setMeta(m)
+                setSavedNames(prev => ({ ...prev, [cur.name]: true }))
+                // 快照必须带上框，否则会触发切图恢复把框清空
+                setSnapshots(prev => ({ ...prev, [cur.name]: { boxes: mapped.map(b => ({ ...b })), meta: m } }))
+            })
+            .catch(() => { })
+        return () => { cancelled = true }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [cur])
+
+    // 通知上层当前图像（侧栏"Current File"跟随）；文件夹时给绝对路径
+    useEffect(() => {
+        if (!onCurrentChange || !cur) return
+        const name = cur.name || ''
+        const rel = name.replace(/^[A-Za-z]:\\fakepath\\/i, '')
+        const path = rootDir ? `${rootDir}\\${rel}` : rel
+        onCurrentChange({ name: rel || name, path })
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [cur, rootDir])
+    // 整图缺陷类型＝框选类别的汇总（无框→OK；多种→Dl&Po&Db，按首次出现顺序）
+    const defectCodes = []
+    boxes.forEach(b => {
+        const c = codeOf(b.class_id)
+        if (!defectCodes.includes(c)) defectCodes.push(c)
+    })
+    const effectiveDefect = defectCodes.length ? defectCodes.join('&') : 'OK'
     // 预览规范化文件名
     const previewStem = [
         clean(meta.fiber), clean(meta.matrix), clean(meta.structure), clean(meta.method),
@@ -434,6 +500,14 @@ export default function CScanLabeler({ initial = null }) {
             const res = await axios.post(`${API}/cscan/raw/save`, fd)
             if (res.data.error) { message.error(res.data.error); return }
             message.success(`已入库 ${res.data.filename}（切片 ${res.data.slice.tiles}：正${res.data.slice.pos}/背景${res.data.slice.neg}）`)
+            if (cur) {
+                setSavedNames(prev => ({ ...prev, [cur.name]: true }))
+                // 存快照：切回该图时恢复框/元数据/标尺，直观看到入库内容
+                setSnapshots(prev => ({
+                    ...prev,
+                    [cur.name]: { boxes: boxes.map(b => ({ ...b })), meta: { ...meta }, calib },
+                }))
+            }
         } catch (e) {
             message.error(`保存失败: ${e?.response?.data?.error || e.message || ''}`)
         } finally { setSaving(false) }
@@ -463,10 +537,6 @@ export default function CScanLabeler({ initial = null }) {
     }
 
     const classOptions = classList.map(c => ({ value: c.id, label: `${c.code} - ${c.zh}` }))
-    const defectOptions = [
-        ...classList.map(c => ({ value: c.code, label: `${c.code} - ${c.zh}` })),
-        ...(classList.some(c => c.code === 'OK') ? [] : [{ value: 'OK', label: 'OK - 好区/背景' }]),
-    ]
 
     // 智能解析一段文字 → 自动填充元数据
     const parseMeta = async () => {
@@ -488,9 +558,9 @@ export default function CScanLabeler({ initial = null }) {
                 matrixGrade: m.matrixGrade || prev.matrixGrade,
                 timestamp: m.timestamp || prev.timestamp,
                 probe_type: m.probe_type || prev.probe_type,
-                description: prev.description || text,
+                description: text,      // 与上方智能解析输入框保持一致
             }))
-            if (m.defectType) setDefectType(m.defectType)
+            // 缺陷类型取自框选类别，不再由文本解析设置
         } catch (e) {
             message.error('解析失败')
         } finally {
@@ -521,9 +591,7 @@ export default function CScanLabeler({ initial = null }) {
     const tallyCounts = {}
     boxes.forEach(b => { const c = codeOf(b.class_id); tallyCounts[c] = (tallyCounts[c] || 0) + 1 })
     const missingN = REQ_FIELDS.filter(f => !(meta[f.k] || '').trim()).length
-    const dtCls = classList.find(c => c.code === effectiveDefect)
-    const dtZh = dtCls?.zh || (effectiveDefect === 'OK' ? '好区 / 背景' : '')
-    const dtColor = dtCls ? colorOf(dtCls.id) : (effectiveDefect === 'OK' ? '#52c41a' : '#999')
+    const dtColor = effectiveDefect === 'OK' ? '#52c41a' : '#f5222d'
 
     return (
         <div style={{ height: '100%', overflow: 'auto', paddingRight: 4 }}>
@@ -560,16 +628,7 @@ export default function CScanLabeler({ initial = null }) {
                                 label: <span style={{ fontSize: 13 }}>详细字段（已填 {filledMetaN}/{metaKeys.length}）</span>,
                                 children: (
                                     <Space direction="vertical" style={{ width: '100%' }} size={5}>
-                                        {/* 行1 缺陷类型 */}
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
-                                            <div style={META_LABEL}>缺陷类型</div>
-                                            <Space.Compact style={{ flex: 1, minWidth: 0, width: '100%' }}>
-                                                <Select size="small" style={{ flex: 1, width: '50%' }} showSearch optionFilterProp="label"
-                                                    value={defectType} onChange={setDefectType} options={defectOptions} />
-                                                <Button size="small" style={{ flex: 1, width: '50%' }} onClick={() => setAddClassOpen(true)}>＋新类</Button>
-                                            </Space.Compact>
-                                        </div>
-                                        {/* 行2 纤维 + 基体 */}
+                                        {/* 行1 纤维 + 基体 */}
                                         <div style={{ display: 'flex', gap: 8, width: '100%' }}>
                                             <div style={{ flex: 1, minWidth: 0 }}>
                                                 <MetaField label="纤维" labelWidth={64} v={meta.fiber} onChange={v => setMeta({ ...meta, fiber: v })} opts={['CF', 'GF', 'BF', 'AF']} />
@@ -605,9 +664,14 @@ export default function CScanLabeler({ initial = null }) {
                                                 <MetaField label="探头" labelWidth={64} placeholder="如 5MHz water immersion" v={meta.probe_type} onChange={v => setMeta({ ...meta, probe_type: v })} />
                                             </div>
                                         </div>
-                                        {/* 描述 */}
-                                        <Input size="small" placeholder="描述(损伤/增益/来源…)" value={meta.description}
-                                            onChange={e => setMeta({ ...meta, description: e.target.value })} />
+                                        {/* 补充信息（描述）：与其它字段同款 label 对齐 */}
+                                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, width: '100%' }}>
+                                            <div style={{ ...META_LABEL, width: 64, paddingTop: 3 }}>补充信息</div>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <Input.TextArea rows={3} size="small" placeholder="描述(损伤/增益/来源…)" value={meta.description}
+                                                    onChange={e => setMeta({ ...meta, description: e.target.value })} />
+                                            </div>
+                                        </div>
                                     </Space>
                                 ),
                             }]} />
@@ -624,13 +688,14 @@ export default function CScanLabeler({ initial = null }) {
                 <div style={{ flex: 1, minWidth: 0, order: 1 }}>
                     <Card size="small" title={<Space><ScanOutlined />缺陷标注</Space>}
                         bodyStyle={{ padding: 8 }}>
-                        <Space wrap style={{ marginBottom: 8 }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                             <Select size="small" style={{ width: 170 }} value={classSelValue}
                                 onChange={v => {
                                     if (selBox) setBoxes(prev => prev.map((b, i) => i === selected ? { ...b, class_id: v } : b))
                                     else setCurrentClassId(v)
                                 }}
                                 options={classOptions} placeholder="类别(作用于选中框或新框)" />
+                            <Button size="small" onClick={() => setAddClassOpen(true)}>＋新类</Button>
                             <Button size="small" type={mode === 'annotate' ? 'primary' : 'default'} onClick={() => setMode('annotate')}>标注</Button>
                             <Button size="small" type={mode === 'pan' ? 'primary' : 'default'} icon={<PanIcon />}
                                 title="平移：按住拖动画布" onClick={() => setMode('pan')} />
@@ -640,11 +705,29 @@ export default function CScanLabeler({ initial = null }) {
                             <Button size="small" type={mode === 'ruler' ? 'primary' : 'default'} icon={<RulerIcon />}
                                 title="标尺：画一条已知长度的线段，定 mm/px 比例尺"
                                 onClick={toggleRuler} />
-                            <Divider type="vertical" />
-                            <Tag color="purple">{selBox ? `${codeOf(selBox.class_id)} #${selected + 1}` : '未选中'}</Tag>
-                            <Button size="small" danger icon={<DeleteOutlined />} onClick={deleteSelected} disabled={selected < 0}>删除选中</Button>
-                            <Button size="small" icon={<UndoOutlined />} onClick={() => { setBoxes(prev => prev.slice(0, -1)); setSelected(-1) }} disabled={boxes.length === 0}>撤销最后</Button>
-                        </Space>
+                            <Button size="small" danger icon={<DeleteOutlined />} title="删除选中框"
+                                onClick={deleteSelected} disabled={selected < 0} />
+                            <Button size="small" icon={<UndoOutlined />} title="撤销最后画的框"
+                                onClick={() => { setBoxes(prev => prev.slice(0, -1)); setSelected(-1) }}
+                                disabled={boxes.length === 0} />
+                            {selBox && (
+                                <>
+                                    <Divider type="vertical" />
+                                    <Tag color="purple" style={{ marginRight: 0 }}>{`${codeOf(selBox.class_id)} #${selected + 1}`}</Tag>
+                                </>
+                            )}
+                            {files.length > 1 && (
+                                <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                    <Button size="small" icon={<LeftOutlined />} onClick={goPrev}
+                                        disabled={idx <= 0} title="上一张" />
+                                    <span style={{ color: '#666', fontSize: 12, whiteSpace: 'nowrap' }}>
+                                        {idx + 1}/{files.length}
+                                    </span>
+                                    <Button size="small" icon={<RightOutlined />} onClick={goNext}
+                                        disabled={idx >= files.length - 1} title="下一张" />
+                                </span>
+                            )}
+                        </div>
                         <div style={{ textAlign: 'center' }}>
                             <canvas ref={canvasRef}
                                 style={{ width: '100%', background: '#f0f0f0', border: '1px solid #d9d9d9', borderRadius: 4, cursor: mode === 'pan' ? 'grab' : 'crosshair' }}
@@ -652,13 +735,17 @@ export default function CScanLabeler({ initial = null }) {
                                 onMouseUp={onMouseUp} onMouseLeave={onMouseUp} />
                         </div>
                         <div style={{ marginTop: 8 }}>
+                            {cur && (
+                                <span style={{ fontSize: 12, marginRight: 8, color: savedNames[cur.name] ? '#52c41a' : '#bbb' }}>
+                                    {savedNames[cur.name] ? '已入库' : '未入库'}
+                                </span>
+                            )}
                             {boxes.map((b, i) => (
                                 <Tag key={b.uid} color={colorOf(b.class_id)} style={{ cursor: 'pointer', marginBottom: 4 }}
                                     onClick={() => setSelected(i)}>
                                     #{i + 1} {codeOf(b.class_id)}
                                 </Tag>
                             ))}
-                            {boxes.length === 0 && <span style={{ color: '#bbb', fontSize: 12 }}>在图上拖拽画缺陷框，或直接保存为背景</span>}
                         </div>
                     </Card>
                 </div>
@@ -694,7 +781,7 @@ export default function CScanLabeler({ initial = null }) {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: 13 }}>
                         整图类别：
                         <Tag color={dtColor} style={{ marginRight: 0 }}>
-                            {effectiveDefect}{dtZh ? ` · ${dtZh}` : ''}
+                            {effectiveDefect === 'OK' ? 'OK · 好区 / 背景' : effectiveDefect}
                         </Tag>
                     </div>
                     <div style={{ fontSize: 13 }}>

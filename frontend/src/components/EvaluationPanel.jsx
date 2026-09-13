@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Button, Select, Upload, Input, Tag, message, Spin, Collapse, Segmented } from 'antd'
-import { SendOutlined, UploadOutlined, RobotOutlined, UserOutlined, DownloadOutlined, StopOutlined } from '@ant-design/icons'
+import { SendOutlined, UploadOutlined, RobotOutlined, UserOutlined, DownloadOutlined, StopOutlined, CheckOutlined } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -39,7 +39,8 @@ const markdownComponents = {
 
 export default function EvaluationPanel({ cscanContext = null, prefill = '' }) {
     const [models, setModels] = useState([])
-    const [selectedModel, setSelectedModel] = useState(null)
+    const [cscanModels, setCscanModels] = useState([])
+    const [selectedModels, setSelectedModels] = useState([])   // 可同时选：一个 AScan + 一个 CScan
     const [aiMode, setAiMode] = useState('cloud')  // 'cloud' | 'local'
     const [messages, setMessages] = useState([])
     const [inputText, setInputText] = useState('')
@@ -109,23 +110,50 @@ export default function EvaluationPanel({ cscanContext = null, prefill = '' }) {
         msgEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }, [messages, streamingText])
 
-    // 加载模型列表
+    // 加载模型列表：超声 AScan（RF/DL）与 超声 CScan（YOLO）并列
     useEffect(() => {
-        axios.get('http://127.0.0.1:8000/train/models')
-            .then(res => {
-                const list = res.data.models || []
-                setModels(list)
-                // 默认选择准确率最高的模型
-                if (list.length > 0) {
-                    const best = list.reduce((a, b) => (a.accuracy || 0) > (b.accuracy || 0) ? a : b)
-                    setSelectedModel(best.model_name)
-                }
-            })
-            .catch(() => {/* 默认为空 */})
+        Promise.all([
+            axios.get('http://127.0.0.1:8000/train/models').then(r => r.data.models || []).catch(() => []),
+            axios.get('http://127.0.0.1:8000/cscan/train/models').then(r => r.data.models || []).catch(() => []),
+        ]).then(([as, cs]) => {
+            setModels(as)
+            setCscanModels(cs)
+            // 默认各选一个准确率最高的：AScan 一个 + CScan 一个
+            const pick = (arr) => arr.length ? arr.reduce((a, b) => (a.accuracy || 0) > (b.accuracy || 0) ? a : b) : null
+            const bestA = pick(as), bestC = pick(cs)
+            const def = []
+            if (bestA) def.push(bestA.model_name)
+            if (bestC) def.push(bestC.model_name)
+            if (def.length) setSelectedModels(def)
+        })
     }, [])
 
-    // 模型选择
-    const curModel = models.find(m => m.model_name === selectedModel)
+    // 每组只保留一个：取每组最后选中的一个
+    const handleModelsChange = (vals) => {
+        const lastA = [...vals].reverse().find(v => models.some(m => m.model_name === v))
+        const lastC = [...vals].reverse().find(v => cscanModels.some(m => m.model_name === v))
+        const next = []
+        if (lastA) next.push(lastA)
+        if (lastC) next.push(lastC)
+        setSelectedModels(next)
+    }
+    const modelOptions = [
+        { label: '超声AScan（信号分类 RF/DL）', options: models.map(m => ({
+            value: m.model_name,
+            label: `${m.model_name}  (${((m.accuracy || 0) * 100).toFixed(1)}%)`,
+        })) },
+        { label: '超声CScan（图像检测 YOLO）', options: cscanModels.map(m => ({
+            value: m.model_name,
+            label: `${m.model_name}  (mAP50 ${((m.accuracy || 0) * 100).toFixed(1)}%)`,
+        })) },
+    ].filter(g => g.options.length > 0)
+    // 选中的模型（每组至多一个）
+    const ascanModelName = selectedModels.find(v => models.some(m => m.model_name === v)) || ''
+    const cscanModelName = selectedModels.find(v => cscanModels.some(m => m.model_name === v)) || ''
+    // 收起时的汇总文本：AScan（x%）+CScan（y%）；未选则该组显示 ？
+    const _fmtAcc = v => (v != null ? `${(v * 100).toFixed(1)}%` : '？')
+    const modelSummary = `AScan（${_fmtAcc(models.find(m => m.model_name === ascanModelName)?.accuracy)}）`
+        + `+CScan（${_fmtAcc(cscanModels.find(m => m.model_name === cscanModelName)?.accuracy)}）`
 
     // 上传文件
     const handleUpload = async (file) => {
@@ -265,7 +293,8 @@ export default function EvaluationPanel({ cscanContext = null, prefill = '' }) {
                 body: JSON.stringify({
                     question,
                     history: chatHistory,
-                    model_name: selectedModel || '',
+                    model_name: ascanModelName,
+                    ...(cscanModelName ? { cscan_model: cscanModelName } : {}),
                     ai_mode: aiMode,
                     ...(cscanContext ? { cscan_context: cscanContext } : {}),
                 }),
@@ -365,7 +394,7 @@ export default function EvaluationPanel({ cscanContext = null, prefill = '' }) {
                 signal_analysis: content,
                 defect_result: extractDefectType(content),
                 confidence: extractConfidence(content),
-                model_name: selectedModel || '',
+                model_name: ascanModelName || cscanModelName || '',
             })
             if (res.data.success) {
                 setReportInfo({ loading: false, url: res.data.download_url, error: null })
@@ -649,17 +678,37 @@ export default function EvaluationPanel({ cscanContext = null, prefill = '' }) {
                         ]}
                     />
                     <span style={{ fontSize: 13, color: '#666', whiteSpace: 'nowrap' }}>模型选择：</span>
+                    <style>{`
+                        .eval-model-popup .ant-select-item-option-state { display: none; }
+                        .eval-model-select .ant-select-selection-item { max-width: none; }
+                    `}</style>
                     <Select
-                        value={selectedModel}
-                        onChange={setSelectedModel}
-                        style={{ width: 260 }}
+                        mode="multiple"
+                        className="eval-model-select"
+                        popupClassName="eval-model-popup"
+                        value={selectedModels}
+                        onChange={handleModelsChange}
+                        style={{ width: 440 }}
                         size="small"
-                        disabled={analyzing || models.length === 0}
-                        placeholder="选择评估模型"
-                        options={models.map(m => ({
-                            value: m.model_name,
-                            label: `${m.model_name}  (${(m.accuracy * 100).toFixed(1)}%)`,
-                        }))}
+                        disabled={analyzing || modelOptions.length === 0}
+                        placeholder="选择评估模型（可各选一个）"
+                        options={modelOptions}
+                        popupMatchSelectWidth={false}
+                        tagRender={props => (
+                            // 只渲染一个汇总标签：AScan（x%）+CScan（y%）
+                            props.value === (selectedModels[0] ?? '__none__')
+                                ? <span style={{ marginRight: 4 }}>{modelSummary}</span>
+                                : null
+                        )}
+                        optionRender={opt => (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                <CheckOutlined style={{
+                                    color: '#1677ff',
+                                    visibility: selectedModels.includes(opt.value) ? 'visible' : 'hidden',
+                                }} />
+                                {opt.label}
+                            </span>
+                        )}
                     />
                 </div>
             </div>

@@ -258,7 +258,9 @@ def _run_cscan_train(job: dict, cfg: dict):
         if not os.path.isfile(best):
             raise FileNotFoundError(f"训练未产出 best.pt: {best}")
         acc = max((r["mAP50"] for r in rows if r.get("mAP50") is not None), default=0.0)
-        stem = f"cscan_{ts}"
+        # 有信息的模型名：yolo_<类别>_<mAP50>_<日期>_<时间>（同 AScan 的 deep_... 风格）
+        cls_part = "_".join(sorted(CLASS_ZH))
+        stem = f"yolo_{cls_part}_{acc:.3f}_{ts}"
         shutil.copy2(best, os.path.join(MODELS_DIR, stem + ".pt"))
         meta = {
             "model_name": stem,

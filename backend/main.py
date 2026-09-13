@@ -1177,6 +1177,55 @@ CSCAN_LABELS_DIR = os.path.join(CSCAN_DATASET_DIR, "labels")
 CSCAN_META_DIR = os.path.join(CSCAN_DATASET_DIR, "meta")
 CSCAN_CLASSES_TXT = os.path.join(CSCAN_RAW_DIR, "labels.txt")
 CSCAN_CODES_JSON = os.path.join(CSCAN_DATASET_DIR, "codes.json")
+# 原始上传文件名 → 入库 stem 的映射（跨会话还原标注用；raw/ 已被 gitignore）
+CSCAN_INDEX_JSON = os.path.join(CSCAN_RAW_DIR, "_index.json")
+
+
+def _load_cscan_index() -> dict:
+    if os.path.isfile(CSCAN_INDEX_JSON):
+        try:
+            with open(CSCAN_INDEX_JSON, encoding="utf-8") as f:
+                return json.load(f) or {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_cscan_index(d: dict):
+    try:
+        with open(CSCAN_INDEX_JSON, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+
+
+def _index_set(original_name: str, stem: str, filename: str):
+    """记录 原始文件名 → stem（同名覆盖）。"""
+    if not original_name:
+        return
+    d = _load_cscan_index()
+    d[os.path.basename(original_name)] = {"stem": stem, "filename": filename}
+    _save_cscan_index(d)
+
+
+def _index_update_stem(old_stem: str, new_stem: str):
+    d = _load_cscan_index()
+    hit = False
+    for v in d.values():
+        if isinstance(v, dict) and v.get("stem") == old_stem:
+            v["stem"] = new_stem
+            if v.get("filename"):
+                v["filename"] = new_stem + os.path.splitext(v["filename"])[1]
+            hit = True
+    if hit:
+        _save_cscan_index(d)
+
+
+def _index_remove_stem(stem: str):
+    d = _load_cscan_index()
+    kept = {k: v for k, v in d.items() if not (isinstance(v, dict) and v.get("stem") == stem)}
+    if len(kept) != len(d):
+        _save_cscan_index(kept)
 
 
 def _cscan_class_list():
@@ -1225,6 +1274,32 @@ def cscan_raw_item(stem: str):
              for (c, cx, cy, w, h) in parse_yolo(os.path.join(CSCAN_RAW_DIR, stem + ".txt"))]
     return {"stem": stem, "filename": os.path.basename(img), "ext": os.path.splitext(img)[1].lower(),
             "meta": meta, "yolo": boxes, "has_txt": bool(boxes)}
+
+
+@app.get("/cscan/raw/lookup")
+def cscan_raw_lookup(name: str):
+    """按【原始上传文件名】查已入库记录（跨会话还原标注用）。
+    顺序：索引映射 → 直接按 stem（文件名去扩展名）匹配。返回 meta + 框。"""
+    base = os.path.basename(name or "")
+    if not base:
+        return {"found": False}
+    stem = ""
+    rec = _load_cscan_index().get(base)
+    if isinstance(rec, dict):
+        stem = rec.get("stem") or ""
+    if not stem:
+        cand = os.path.splitext(base)[0]
+        if find_raw_image(CSCAN_RAW_DIR, cand):
+            stem = cand
+    if not stem or not os.path.basename(stem) == stem:
+        return {"found": False}
+    img = find_raw_image(CSCAN_RAW_DIR, stem)
+    if not img:
+        return {"found": False}
+    meta = _read_cscan_sidecar(stem, CSCAN_RAW_DIR)
+    boxes = [{"class_id": c, "cx": cx, "cy": cy, "w": w, "h": h}
+             for (c, cx, cy, w, h) in parse_yolo(os.path.join(CSCAN_RAW_DIR, stem + ".txt"))]
+    return {"found": True, "stem": stem, "filename": os.path.basename(img), "meta": meta, "yolo": boxes}
 
 
 @app.post("/cscan/raw/save")
@@ -1281,6 +1356,7 @@ async def cscan_raw_save(file: UploadFile = File(...),
             os.unlink(tmp.name)
         except OSError:
             pass
+    _index_set(file.filename or "", stem, stem + suffix)   # 记录原始名→stem（跨会话还原）
     return {"ok": True, "stem": stem, "filename": stem + suffix, "slice": slice_res}
 
 
@@ -1326,6 +1402,7 @@ def _delete_cscan_raw(stem: str) -> bool:
         if len(keep) != len(lines):
             with open(p, "w", encoding="utf-8") as f:
                 f.writelines(keep)
+    _index_remove_stem(stem)
     return found
 
 
@@ -1386,6 +1463,7 @@ def cscan_raw_update(stem: str, req: dict):
                                 CSCAN_IMAGES_DIR, CSCAN_LABELS_DIR, CSCAN_META_DIR,
                                 read_classes(CSCAN_CLASSES_TXT))
     if new_stem != stem:
+        _index_update_stem(stem, new_stem)
         _delete_cscan_raw(stem)
     return {"ok": True, "stem": new_stem, "filename": new_stem + ext, "slice": slice_res}
 
@@ -1608,6 +1686,7 @@ async def chat_ask(req: dict):
         # 无文件：通用助手指令
         system_prompt = build_no_file_prompt()
     # ── 数据集上下文判定：CScan 数据库问题 vs AScan(.nde) 数据集问题 ──
+    cscan_model = (req.get("cscan_model") or "").strip()   # 智能评估里选中的 CScan YOLO 模型
     cscan_context = req.get("cscan_context")
     cscan_keywords = ['cscan', 'c扫', 'c扫描', 'c-scan', 'c图', 'c扫图', 'c 扫']
     is_cscan_q = any(k in question.lower() for k in cscan_keywords)
@@ -1623,6 +1702,11 @@ async def chat_ask(req: dict):
             system_prompt += _cscan_db_block(question)
         except Exception as e:
             system_prompt += f"\n\n## CScan 数据库\n读取 CScan 图像库时出错：{e}"
+    # 智能评估里选了 CScan(YOLO) 模型 → 告知模型，供 C 扫相关回答引用
+    if cscan_model:
+        system_prompt += (f"\n\n## 本次评估所选模型\n超声CScan 检测模型：{cscan_model}"
+                          "（YOLO 目标检测，用于 C 扫图缺陷定位/尺寸换算；"
+                          "如涉及 C 扫判定，请说明基于该模型的结果）")
     # 问题里含具体关键字（如项目 Z109）且是数据库类问题 → 全库检索（AScan+CScan 都查）
     if is_db_q:
         try:
@@ -2040,17 +2124,63 @@ def _count_lines(path):
     return n
 
 
+def _cscan_box_class_counts():
+    """按 labels/*.txt 统计各类别框数（class_id → "CODE·中文"）。"""
+    classes = read_classes(CSCAN_CLASSES_TXT)
+    zh = {c["code"]: c["zh"] for c in _cscan_class_list()}
+    cnt = {}
+    if os.path.isdir(CSCAN_LABELS_DIR):
+        for fn in os.listdir(CSCAN_LABELS_DIR):
+            if not fn.endswith(".txt"):
+                continue
+            try:
+                with open(os.path.join(CSCAN_LABELS_DIR, fn), encoding="utf-8") as f:
+                    for ln in f:
+                        p = ln.split()
+                        if len(p) < 5:
+                            continue
+                        cid = int(p[0])
+                        code = classes[cid] if 0 <= cid < len(classes) else str(cid)
+                        key = f"{code}·{zh.get(code, code)}"
+                        cnt[key] = cnt.get(key, 0) + 1
+            except Exception:
+                pass
+    return cnt
+
+
+def _cscan_material_counts():
+    """按 raw 边车统计材料体系（纤维/基体）→ 文件数。"""
+    cnt = {}
+    if os.path.isdir(CSCAN_RAW_DIR):
+        for fn in os.listdir(CSCAN_RAW_DIR):
+            if os.path.splitext(fn)[1].lower() not in CSCAN_IMAGE_EXTS:
+                continue
+            m = _read_cscan_sidecar(os.path.splitext(fn)[0], CSCAN_RAW_DIR)
+            fib = m.get("fiber") or "?"
+            mat = m.get("matrix") or "?"
+            fib = "?" if fib == "NaN" else fib
+            mat = "?" if mat == "NaN" else mat
+            key = f"{fib}/{mat}"
+            cnt[key] = cnt.get(key, 0) + 1
+    return cnt
+
+
 @app.get("/cscan/train/preview")
 def cscan_train_preview():
-    """CScan YOLO 训练预览：tile 规模/类别/预训练/已收编模型/ultralytics 可用。"""
+    """CScan YOLO 训练预览：tile 规模/类别/预训练/已收编模型/ultralytics 可用 + 分布。"""
     try:
         return {
             "available": ultralytics_available(),
             "classes": _cscan_class_list(),
+            "by_defect": _cscan_box_class_counts(),      # 各类缺陷框数（按标签统计）
+            "by_material": _cscan_material_counts(),     # 材料体系分布
             "n_train": _count_lines(os.path.join(CSCAN_DATASET_DIR, "train.txt")),
             "n_val": _count_lines(os.path.join(CSCAN_DATASET_DIR, "val.txt")),
             "n_images": len([f for f in os.listdir(CSCAN_IMAGES_DIR) if f.endswith(".png")])
-                         if os.path.isdir(CSCAN_IMAGES_DIR) else 0,
+                         if os.path.isdir(CSCAN_IMAGES_DIR) else 0,   # 切片(tile)总数
+            "n_raw": len([f for f in os.listdir(CSCAN_RAW_DIR)
+                          if os.path.splitext(f)[1].lower() in CSCAN_IMAGE_EXTS])
+                     if os.path.isdir(CSCAN_RAW_DIR) else 0,          # 原图数
             "pretrained": [p for p in CSCAN_PRETRAINED
                            if os.path.isfile(os.path.join(CSCAN_DATASET_DIR, p))],
             "models": list_cscan_model_meta(),
@@ -2149,14 +2279,18 @@ _CSCAN_ZH = {
     "defectType": {"分层": "Dl", "脱粘": "Db", "孔隙": "Po", "气孔": "Vo",
                    "夹杂": "In", "富树脂": "Rs", "纤维相关": "Fb", "胶膜孔隙": "Ap",
                    "耦合不良": "Cp", "无缺陷": "OK", "好区": "OK"},
-    "fiber": {"碳纤维": "CF", "碳纤": "CF", "玻璃纤维": "GF", "玻纤": "GF",
+    "fiber": {"CF": "CF", "GF": "GF", "BF": "BF", "AF": "AF",
+              "碳纤维": "CF", "碳纤": "CF", "玻璃纤维": "GF", "玻纤": "GF",
               "芳纶": "AF", "硼纤维": "BF"},
-    "matrix": {"环氧": "EP", "双马来酰亚胺": "BMI", "双马": "BMI",
+    "matrix": {"EP": "EP", "BMI": "BMI", "PI": "PI", "TP": "TP", "SiC": "SiC",
+               "环氧": "EP", "双马来酰亚胺": "BMI", "双马": "BMI",
                "聚酰亚胺": "PI", "热塑性": "TP", "热塑": "TP", "碳化硅": "SiC"},
-    "structure": {"板板胶接": "BondPP", "板芯胶接": "BondSC", "变厚度": "Taper", "变厚": "Taper",
+    "structure": {"Plate": "Plate", "Taper": "Taper", "BondPP": "BondPP", "BondSC": "BondSC",
+                  "板板胶接": "BondPP", "板芯胶接": "BondSC", "变厚度": "Taper", "变厚": "Taper",
                   "平板": "Plate", "蜂窝": "BondSC", "板-板": "BondPP", "板-芯": "BondSC",
                   "板板": "BondPP", "板芯": "BondSC"},
-    "method": {"喷水穿透": "WPUT", "空耦穿透": "AUT", "水穿透": "WPUT", "穿透": "WPUT",
+    "method": {"WRUT": "WRUT", "WPUT": "WPUT", "PAUT": "PAUT", "AUT": "AUT",
+               "喷水穿透": "WPUT", "空耦穿透": "AUT", "水穿透": "WPUT", "穿透": "WPUT",
                "相控阵": "PAUT", "空耦": "AUT", "水浸": "WRUT", "水膜": "WRUT",
                "水耦合": "WRUT", "反射": "WRUT"},
 }
@@ -2178,12 +2312,36 @@ def _cscan_vocab():
     return vocab
 
 
+_ASCII_RE = re.compile(r"^[A-Za-z0-9]+$")
+
+
 def _pick_zh(text: str, table: dict):
-    """按别名长度降序在文本里找中文关键词 → 规范码。"""
+    """按别名长度降序在文本里找关键词 → 规范码。不区分大小写；
+    纯英文数字别名用词边界匹配（避免 'ep' 命中单词内部）。"""
+    low = (text or "").lower()
     for alias, code in sorted(table.items(), key=lambda kv: -len(kv[0])):
-        if alias in text:
+        a = alias.lower()
+        if _ASCII_RE.match(alias):
+            if re.search(r"(?<![A-Za-z0-9])" + re.escape(a) + r"(?![A-Za-z0-9])", low):
+                return code
+        elif a in low:
             return code
     return ""
+
+
+def _canon(token: str, table: dict) -> str:
+    """把用户输入令牌规范化：命中表内代码/别名 → 规范码；否则英文数字则大写。"""
+    t = (token or "").strip()
+    if not t:
+        return ""
+    lt = t.lower()
+    for c in table.values():          # 直接就是代码（如 cf → CF）
+        if c.lower() == lt:
+            return c
+    code = _pick_zh(t, table)
+    if code:
+        return code
+    return t.upper() if _ASCII_RE.match(t) else t
 
 
 @app.post("/cscan/meta/parse")
@@ -2231,7 +2389,7 @@ def cscan_meta_parse(req: dict):
                            ("code", "(?:项目|型号)"), ("matrix", "基体"), ("fiber", "纤维")):
             if out.get(key):
                 continue
-            m = re.search(label + r"\s*[：:为是]?\s*([A-Za-z0-9][A-Za-z0-9._-]*)", text)
+            m = re.search(label + r"\s*[：:为是]?\s*([A-Za-z0-9][A-Za-z0-9._&-]*)", text)
             if m:
                 out[key] = m.group(1)
 
@@ -2255,15 +2413,25 @@ def cscan_meta_parse(req: dict):
                 if code:
                     out["method"] = code
 
-        # ④ raw 已有值词典扫描（项目/牌号/材料等已知值；避免误匹配太短令牌）
+        # ④ raw 已有值词典扫描（项目/牌号/材料等已知值；不区分大小写）
         vocab = _cscan_vocab()
+        low_text = text.lower()
         for key, values in vocab.items():
             if out.get(key):
                 continue
             for val in sorted(values, key=len, reverse=True):
-                if len(val) >= 2 and val in text:
-                    out[key] = val
+                if len(val) >= 2 and val.lower() in low_text:
+                    out[key] = val        # 用 raw 里的原始大小写（规范写法）
                     break
+
+        # ⑤ 规范化输出：命中表内的取规范码（cf→CF、ep→EP），型号/牌号统一大写
+        for key, table in _CSCAN_ZH.items():
+            if out.get(key):
+                out[key] = _canon(out[key], table)
+        for key in ("code", "fiberGrade", "matrixGrade"):
+            v = str(out.get(key) or "")
+            if v and v != "NaN" and re.fullmatch(r"[A-Za-z0-9._&-]+", v):
+                out[key] = v.upper()
 
         # ④ 时间戳兜底
         if not out.get("timestamp"):
@@ -2274,5 +2442,175 @@ def cscan_meta_parse(req: dict):
         return {"meta": out}
     except Exception as e:
         return {"error": str(e)}
+
+# endregion
+
+
+# ══════════════════════════════════════════════════
+# VT 内窥镜数据（数据库 → 光学检测 → 内窥镜 VT）
+# ══════════════════════════════════════════════════
+# region VT
+
+VT_RAW_DIR = os.path.join(os.path.dirname(__file__), "..", "dataset", "vt_dataset", "raw")
+VT_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
+VT_VIDEO_EXTS = {".mp4", ".mov", ".avi", ".webm"}
+VT_ALL_EXTS = VT_IMAGE_EXTS | VT_VIDEO_EXTS
+
+
+def _read_vt_sidecar(stem, base=None):
+    base = base or VT_RAW_DIR
+    p = os.path.join(base, stem + ".json")
+    if not os.path.isfile(p):
+        return {}
+    try:
+        with open(p, encoding="utf-8") as f:
+            return json.load(f) or {}
+    except Exception:
+        return {}
+
+
+@app.get("/vt_dataset")
+def vt_dataset():
+    """VT（内窥镜）数据库概览：形状与 DatabaseOverview 兼容。
+    附带 media(image|video)、observed_at、description 供前端展示。"""
+    base = VT_RAW_DIR
+    if not os.path.isdir(base):
+        return {"error": "vt raw dir not found"}
+    result = {"total_files": 0, "by_defect": {}, "files": []}
+    for fname in sorted(os.listdir(base)):
+        ext = os.path.splitext(fname)[1].lower()
+        if ext not in VT_ALL_EXTS:
+            continue
+        stem = os.path.splitext(fname)[0]
+        m = _read_vt_sidecar(stem, base)
+        media = "video" if ext in VT_VIDEO_EXTS else "image"
+        defect = (m.get("defectType") or "").strip()
+        if not defect or defect == "NaN":
+            defect = "待标注"
+        info = {
+            "filename": fname,
+            "fiber": m.get("fiber") or "-",
+            "matrix": m.get("matrix") or "-",
+            "structure": m.get("structure") or "-",
+            "method": m.get("method") or "VT",
+            "defect": defect,
+            "model": m.get("project") or m.get("code") or "-",
+            "timestamp": re.sub(r"[-: ]", "", m.get("observed_at") or ""),
+            "fiberGrade": m.get("fiberGrade") or "-",
+            "matrixGrade": m.get("matrixGrade") or "-",
+            "probe_type": m.get("probe_type") or "-",
+            "description": m.get("description") or "-",
+            "media": media,
+            "observed_at": m.get("observed_at") or "-",
+        }
+        result["by_defect"].setdefault(defect, {"count": 0, "files": []})
+        result["by_defect"][defect]["files"].append(info)
+        result["by_defect"][defect]["count"] += 1
+        result["files"].append(info)
+        result["total_files"] += 1
+    if result["total_files"] == 0:
+        return {"error": "vt raw dir is empty"}
+    return result
+
+
+@app.get("/vt/file")
+def vt_file(name: str):
+    """返回 VT 原文件（图片或视频）。文件名白名单校验防穿越。"""
+    if not name or os.path.basename(name) != name:
+        return {"error": "invalid filename"}
+    path = os.path.join(VT_RAW_DIR, name)
+    if not os.path.isfile(path):
+        return {"error": "file not found"}
+    return FileResponse(path)
+
+
+# VT 可编辑的元数据字段（其余键忽略）
+_VT_EDIT_KEYS = ["defectType", "project", "observed_at", "description",
+                 "fiber", "matrix", "structure", "method", "probe_type"]
+
+
+def _vt_find(stem: str):
+    """在 VT raw 下找该 stem 的媒体文件，返回绝对路径或 None。"""
+    for ext in VT_ALL_EXTS:
+        p = os.path.join(VT_RAW_DIR, stem + ext)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+@app.get("/vt/raw/item")
+def vt_raw_item(stem: str):
+    """读某 VT 样本的边车（供编辑弹窗预填）。"""
+    if not stem or os.path.basename(stem) != stem:
+        return {"error": "invalid stem"}
+    img = _vt_find(stem)
+    if not img:
+        return {"error": "样本不存在"}
+    ext = os.path.splitext(img)[1].lower()
+    return {"stem": stem, "filename": os.path.basename(img),
+            "media": "video" if ext in VT_VIDEO_EXTS else "image",
+            "meta": _read_vt_sidecar(stem, VT_RAW_DIR)}
+
+
+def _vt_stem_for_defect(stem: str, meta: dict) -> str:
+    """9 段命名时，把第 5 段（缺陷类型）替换为 meta.defectType（空→NaN）。"""
+    parts = stem.split("_")
+    if len(parts) != 9:
+        return stem
+    seg = (meta.get("defectType") or "").strip() or "NaN"
+    if parts[4] == seg:
+        return stem
+    parts[4] = seg
+    return "_".join(parts)
+
+
+@app.put("/vt/raw/{stem}")
+def vt_raw_update(stem: str, req: dict):
+    """改 VT 样本元数据；缺陷类型变化时同步改文件名第 5 段（NaN ↔ 缺陷码）。"""
+    if not stem or os.path.basename(stem) != stem:
+        return {"error": "invalid stem"}
+    img = _vt_find(stem)
+    if not img:
+        return {"error": "样本不存在"}
+    meta = _read_vt_sidecar(stem, VT_RAW_DIR)
+    edits = req.get("meta") if isinstance(req.get("meta"), dict) else {}
+    for k in _VT_EDIT_KEYS:
+        if k in edits and isinstance(edits[k], str):
+            meta[k] = edits[k].strip()
+
+    # 缺陷类型变化 → 改名（媒体文件 + 边车）
+    new_stem = _vt_stem_for_defect(stem, meta)
+    if new_stem != stem:
+        ext = os.path.splitext(img)[1]
+        tgt = os.path.join(VT_RAW_DIR, new_stem + ext)
+        if os.path.exists(tgt):
+            return {"error": f"目标文件名已存在：{new_stem + ext}"}
+        os.rename(img, tgt)
+        old_json = os.path.join(VT_RAW_DIR, stem + ".json")
+        if os.path.isfile(old_json):
+            os.remove(old_json)
+        stem = new_stem
+        img = tgt
+
+    with open(os.path.join(VT_RAW_DIR, stem + ".json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    return {"ok": True, "stem": stem, "filename": os.path.basename(img), "meta": meta}
+
+
+@app.delete("/vt/raw/{stem}")
+def vt_raw_delete(stem: str):
+    """删除 VT 样本（媒体文件 + 边车）。"""
+    if not stem or os.path.basename(stem) != stem:
+        return {"error": "invalid stem"}
+    img = _vt_find(stem)
+    if not img:
+        return {"error": "样本不存在"}
+    for p in (img, os.path.join(VT_RAW_DIR, stem + ".json")):
+        if os.path.isfile(p):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    return {"ok": True}
 
 # endregion

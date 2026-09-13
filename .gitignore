@@ -65,3 +65,6 @@ backend/cscan_models/
 
 # 报告模板测试杂物
 backend/reports/_demo_*
+# VT 内窥镜样本（数据不入库，仅保留占位）
+dataset/vt_dataset/raw/*
+!dataset/vt_dataset/raw/.gitkeep

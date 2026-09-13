@@ -25,7 +25,8 @@ import {
     Tag,
     Tabs,
     Select,
-    Collapse
+    Collapse,
+    message
 } from 'antd'       // UI组件库
 
 // =========================================
@@ -43,6 +44,7 @@ export default function App() {
     const [frames, setFrames] = useState([])                // 多帧波形
     const [frameIndex, setFrameIndex] = useState(0)
     const [currentFile, setCurrentFile] = useState('')
+    const [currentImagePath, setCurrentImagePath] = useState('')   // 当前标注图的绝对路径（folders 上传）
     const [colorMap, setColorMap] = useState('Greys')
     const [activeViewTab, setActiveViewTab] = useState('inspect')   // Inspect/Display 外层Tabs激活页
 
@@ -89,7 +91,7 @@ export default function App() {
     // =========================================
     // 文件上传
     // =========================================
-    const uploadFile = async (file) => {
+    const uploadFile = async (file, fileList) => {
         // 1.清空旧数据
         setInfo(null)
         setEditableJson(null)
@@ -102,10 +104,29 @@ export default function App() {
         setFrameLabels(null)
         setImageSession(null)
 
-        // CScan 原图（bmp/png/jpg/jpeg）→ 进入标注入库界面，不做 .nde 树解析
-        const _ext = (file.name.split('.').pop() || '').toLowerCase()
-        if (['bmp', 'png', 'jpg', 'jpeg'].includes(_ext)) {
-            setImageSession({ file, name: file.name })
+        // CScan 原图 / 文件夹批量 → 进入标注入库界面，不做 .nde 树解析
+        const IMG_EXTS = ['bmp', 'png', 'jpg', 'jpeg']
+        const list = (Array.isArray(fileList) && fileList.length) ? fileList : [file]
+        const imgs = list.filter(f => IMG_EXTS.includes((f.name.split('.').pop() || '').toLowerCase()))
+
+        if (imgs.length === 1 && !file.webkitRelativePath) {
+            // 单个图像文件
+            setImageSession({ file: imgs[0], name: imgs[0].name })
+            setCurrentFile(imgs[0].name)
+            return false
+        }
+        if (imgs.length >= 1) {
+            // 文件夹（或一次多选）：全部图像构成批量标注会话
+            imgs.sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name))
+            const rel0 = (list[0].webkitRelativePath || '')
+            const dirName = rel0.includes('/') ? rel0.split('/')[0] : `${imgs.length} 个图像`
+            const images = imgs.map(f => ({ file: f, name: f.webkitRelativePath || f.name }))
+            setImageSession({ images, name: dirName })
+            setCurrentFile(images[0].name)      // 与右侧当前显示的图像保持一致
+            return false
+        }
+        if (list.some(f => f.webkitRelativePath)) {
+            message.warning('该文件夹下没有可标注的图像（支持 bmp/png/jpg/jpeg）')
             return false
         }
 
@@ -294,23 +315,39 @@ export default function App() {
                                         <div style={{ padding: '8px', background: '#666', borderRadius: 6, display: 'flex', flexDirection: 'column', maxHeight: 'calc(100vh - 180px)' }}>
                                             {/* Current File */}
                                             {currentFile && (
-                                                <div style={{ marginBottom: 6, padding: '6px 0' }}>
-                                                    <div style={{ color: '#999', fontSize: 11, marginBottom: 4 }}>Current File</div>
-                                                    <Tag color="cyan" style={{ maxWidth: 260, whiteSpace: 'normal', wordBreak: 'break-all' }}>
-                                                        {currentFile}
-                                                    </Tag>
+                                                <div style={{ marginBottom: 6, padding: '6px 0', color: '#999', fontSize: 11, lineHeight: 1.5, wordBreak: 'break-all' }}>
+                                                    Current File
+                                                    <span style={{ marginLeft: 6, color: '#ddd' }}>
+                                                        {String(currentImagePath || currentFile).split(/[\\/]/).pop()}
+                                                    </span>
                                                 </div>
                                             )}
-                                            {/* Upload */}
-                                            <div style={{ marginBottom: 6 }}>
+                                            {/* Upload（文件 / 图像文件夹）同一行、铺满 */}
+                                            <style>{`
+                                                .upload-fill.ant-upload-wrapper { display: block; width: 100%; min-width: 0; }
+                                                .upload-fill .ant-upload-select { display: block; width: 100%; }
+                                            `}</style>
+                                            <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
                                                 <Upload
+                                                    className="upload-fill"
                                                     accept=".nde, .h5, .hdf5, .csv, .zip, .bmp, .png, .jpg, .jpeg"
                                                     beforeUpload={uploadFile}
                                                     showUploadList={false}
-                                                    style={{ display: 'block' }}
+                                                    style={{ flex: 1, minWidth: 0 }}
                                                 >
                                                     <Button type="primary" block size="small" style={{ height: 30 }}>
-                                                        Upload NDE/CSV/ZIP
+                                                        Upload
+                                                    </Button>
+                                                </Upload>
+                                                <Upload
+                                                    className="upload-fill"
+                                                    directory
+                                                    beforeUpload={uploadFile}
+                                                    showUploadList={false}
+                                                    style={{ flex: 1, minWidth: 0 }}
+                                                >
+                                                    <Button type="primary" block size="small" style={{ height: 30 }}>
+                                                        Batch Upload
                                                     </Button>
                                                 </Upload>
                                             </div>
@@ -664,8 +701,68 @@ export default function App() {
                                 manageBase="http://127.0.0.1:8000/cscan/raw"
                                 imageUrlFn={filename => `http://127.0.0.1:8000/cscan/image?name=${encodeURIComponent(filename)}`}
                                 extraColumns={[
-                                    { title: '牌号', key: 'grade', width: 130, render: (_, r) => `${r.fiberGrade}/${r.matrixGrade}` },
+                                    { title: '牌号', key: 'grade', width: 96, render: (_, r) => `${r.fiberGrade}/${r.matrixGrade}` },
                                 ]}
+                            />
+                        )
+                        if (datasetPath === 'optical/vt') return (
+                            <DatabaseOverview
+                                endpoint="http://127.0.0.1:8000/vt_dataset"
+                                dirLabel="VT 数据目录"
+                                dirPath="dataset/vt_dataset/raw"
+                                mergeMaterial
+                                manageBase="http://127.0.0.1:8000/vt/raw"
+                                deleteHint="将删除该样本的媒体文件与元数据。"
+                                editSpec={{
+                                    fields: [
+                                        { k: 'defectType', label: '缺陷类型', kind: 'select', opts: [
+                                            { value: '', label: '待标注' },
+                                            { value: 'OK', label: 'OK · 好区' },
+                                            { value: 'Cr', label: 'Cr · 裂纹' },
+                                            { value: 'Dl', label: 'Dl · 分层' },
+                                            { value: 'Db', label: 'Db · 脱粘' },
+                                            { value: 'Po', label: 'Po · 孔隙' },
+                                            { value: 'In', label: 'In · 夹杂' },
+                                            { value: 'Rs', label: 'Rs · 富树脂' },
+                                            { value: 'Vo', label: 'Vo · 气孔' },
+                                            { value: 'Uc', label: 'Uc · 不可识别' },
+                                        ] },
+                                        { k: 'project', label: '项目', kind: 'input' },
+                                        { k: 'observed_at', label: '拍摄时间', kind: 'input' },
+                                    ],
+                                    fromMeta: m => ({
+                                        defectType: m.defectType || '',
+                                        project: m.project || m.code || '',
+                                        observed_at: m.observed_at || '',
+                                        description: m.description || '',
+                                    }),
+                                    toMeta: v => ({
+                                        defectType: v.defectType || '',
+                                        project: v.project || '',
+                                        observed_at: v.observed_at || '',
+                                        description: v.description || '',
+                                    }),
+                                }}
+                                thumbNode={r => {
+                                    const url = `http://127.0.0.1:8000/vt/file?name=${encodeURIComponent(r.filename)}`
+                                    if (r.media === 'video') return {
+                                        // 缩略图：pointerEvents:none 让外层接管悬停，避免 Chrome 弹"画中画/翻译音频"悬浮条
+                                        small: <video src={`${url}#t=0.5`} muted preload="metadata"
+                                            disablePictureInPicture
+                                            style={{ height: 60, borderRadius: 4, border: '1px solid #eee', pointerEvents: 'none' }} />,
+                                        big: <video src={url} controls autoPlay muted
+                                            disablePictureInPicture
+                                            controlsList="nodownload noplaybackrate noremoteplayback"
+                                            style={{ maxWidth: 520, maxHeight: 360 }} />,
+                                    }
+                                    return {
+                                        small: <img src={url} alt={r.filename}
+                                            style={{ height: 60, borderRadius: 4, border: '1px solid #eee' }} />,
+                                        big: <img src={url} alt={r.filename}
+                                            style={{ maxWidth: 600, maxHeight: 400, objectFit: 'contain' }} />,
+                                    }
+                                }}
+                                hideColumns={['method']}
                             />
                         )
                         const placeholderMap = {
@@ -675,7 +772,6 @@ export default function App() {
                             'radiography/dr': '数字射线 DR（待开发）',
                             'radiography/ict': '工业 CT（待开发）',
                             'radiography/terahertz': '太赫兹（待开发）',
-                            'optical/vt': '内窥镜 VT（待开发）',
                             'optical/irt': '红外热成像 IRT（待开发）',
                             'optical/shearography': '激光剪切散斑（待开发）',
                             'electromagnetic/et': '涡流 ET（待开发）',
@@ -707,7 +803,8 @@ export default function App() {
                 </div>
                 {/* CScan 标注入库（上传图片时进入） ****************/}
                 <div style={{ height: '100%', overflow: 'auto', display: (activeModule === 'labeling' && imageSession) ? 'block' : 'none' }}>
-                    <CScanLabeler initial={imageSession} />
+                    <CScanLabeler initial={imageSession}
+                        onCurrentChange={({ name, path }) => { setCurrentFile(name); setCurrentImagePath(path || '') }} />
                 </div>
                 {/* 数据标注(.nde/.csv/.zip 检视标注) ****************/}
                 <div style={{ height: '100%', display: (activeModule === 'labeling' && !imageSession) ? 'block' : 'none' }}>

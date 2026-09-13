@@ -9,6 +9,17 @@ import ReactECharts from 'echarts-for-react'
 import axios from 'axios'
 
 const API = 'http://127.0.0.1:8000'
+
+// 饼图配色（与超声 AScan 面板保持一致）
+const DEFECT_COLORS = {
+    OK: '#52c41a', Dl: '#f5222d', Db: '#fa8c16', Po: '#fadb14',
+    Vo: '#722ed1', In: '#1890ff', Fb: '#13c2c2', Rs: '#2f54eb',
+    Cp: '#eb2f96', Uc: '#d9d9d9',
+}
+const FIBER_GRADE_COLORS = [
+    '#1890ff', '#52c41a', '#fa8c16', '#f5222d', '#722ed1',
+    '#13c2c2', '#2f54eb', '#eb2f96', '#fadb14', '#fa541c',
+]
 const IMG_COLORS = { Dl: '#f5222d', Db: '#fa8c16', Po: '#fadb14' }
 
 const baseOptions = () => {
@@ -128,6 +139,39 @@ export default function CScanTrainPanel({ active }) {
         ...(models.map(m => ({ value: m.model_file, label: `${m.model_file}（续训）` }))),
     ]
 
+    // 各类缺陷分布 / 材料分布（配色与超声 AScan 面板一致）
+    const pieBase = {
+        tooltip: { trigger: 'item', formatter: '{b}: {c} 个 ({d}%)' },
+        series: [{
+            type: 'pie',
+            radius: ['30%', '52%'],
+            center: ['50%', '50%'],
+            label: { formatter: '{b} ({d}%)', color: '#333', fontSize: 10, show: true },
+        }],
+    }
+    const defectPieOption = {
+        ...pieBase,
+        series: [{
+            ...pieBase.series[0],
+            data: Object.entries(preview?.by_defect || {}).map(([k, v]) => ({
+                name: k,
+                value: v,
+                itemStyle: { color: DEFECT_COLORS[k.split('·')[0]] || '#888' },   // 按缺陷码取固定色
+            })),
+        }],
+    }
+    const materialPieOption = {
+        ...pieBase,
+        series: [{
+            ...pieBase.series[0],
+            data: Object.entries(preview?.by_material || {}).map(([k, v], i) => ({
+                name: k,
+                value: v,
+                itemStyle: { color: FIBER_GRADE_COLORS[i % FIBER_GRADE_COLORS.length] },  // 调色板循环
+            })),
+        }],
+    }
+
     return (
         <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto', paddingRight: 4 }}>
             {!preview ? (
@@ -138,29 +182,31 @@ export default function CScanTrainPanel({ active }) {
                 <>
                     {!avail && <Alert type="error" showIcon message="ultralytics 未安装（请用 cscan_env 运行后端）" />}
 
-                    {/* ═══ 数据集概览 ═══ */}
+                    {/* ═══ 数据集概览（与超声 AScan 面板一致：概览 + 缺陷分布 + 材料分布）═══ */}
                     <Row gutter={12} align="stretch">
                         <Col span={8}>
-                            <Card size="small" title="CScan 数据集概览" style={{ height: '100%' }}>
-                                <div style={{ marginBottom: 16 }}><span style={{ color: 'rgba(0,0,0,0.45)' }}>训练 tile：</span><strong>{preview.n_train}</strong></div>
-                                <div style={{ marginBottom: 16 }}><span style={{ color: 'rgba(0,0,0,0.45)' }}>验证 tile：</span><strong>{preview.n_val}</strong></div>
-                                <div style={{ marginBottom: 16 }}><span style={{ color: 'rgba(0,0,0,0.45)' }}>类别：</span>
+                            <Card size="small" title="超声CScan数据集概览" style={{ height: '100%' }}>
+                                <div style={{ marginBottom: 12 }}><span style={{ color: 'rgba(0,0,0,0.45)' }}>原图数：</span><strong>{preview.n_raw ?? '-'}</strong></div>
+                                <div style={{ marginBottom: 12 }}><span style={{ color: 'rgba(0,0,0,0.45)' }}>切片(tile)总数：</span><strong>{preview.n_images ?? '-'}</strong></div>
+                                <div style={{ marginBottom: 12 }}><span style={{ color: 'rgba(0,0,0,0.45)' }}>类别：</span>
                                     {(preview.classes || []).map(c => <Tag key={c.code} color={clsColors(c.code)}>{c.code}-{c.zh}</Tag>)}</div>
-                                <div><span style={{ color: 'rgba(0,0,0,0.45)' }}>已收编模型：</span><strong>{models.length}</strong></div>
-                            </Card>
-                        </Col>
-                        <Col span={8}>
-                            <Card size="small" title="说明" style={{ height: '100%' }}>
-                                <div style={{ fontSize: 13, color: '#666', lineHeight: 1.8 }}>
-                                    YOLO 目标检测（Dl/Db/Po）。每次训练前自动按原图分组重划 train/val（seed 可固定）。
-                                    <br />训练默认 CPU（本机 GPU 仅 2GB，易 OOM），可选手动切 GPU。
+                                <div style={{ marginBottom: 12 }}><span style={{ color: 'rgba(0,0,0,0.45)' }}>已收编模型：</span><strong>{models.length}</strong></div>
+                                <div style={{ marginBottom: 6, fontSize: 12, color: '#888' }}>
+                                    预训练可选：{(preview.pretrained || []).join(' / ') || '-'}
+                                </div>
+                                <div style={{ fontSize: 12, color: '#888' }}>
+                                    模型输出目录：backend/cscan_models（analyze 可用）
                                 </div>
                             </Card>
                         </Col>
                         <Col span={8}>
-                            <Card size="small" title="检测方法/模型" style={{ height: '100%' }}>
-                                <div style={{ marginBottom: 8 }}><span style={{ color: 'rgba(0,0,0,0.45)' }}>预训练可选：</span>{(preview.pretrained || []).join(' / ') || '-'}</div>
-                                <div><span style={{ color: 'rgba(0,0,0,0.45)' }}>模型输出目录：</span>backend/cscan_models（analyze 可用）</div>
+                            <Card size="small" title="各类缺陷分布" bodyStyle={{ padding: 4 }} style={{ height: '100%' }}>
+                                <ReactECharts option={defectPieOption} style={{ height: 280 }} />
+                            </Card>
+                        </Col>
+                        <Col span={8}>
+                            <Card size="small" title="材料分布" bodyStyle={{ padding: 4 }} style={{ height: '100%' }}>
+                                <ReactECharts option={materialPieOption} style={{ height: 280 }} />
                             </Card>
                         </Col>
                     </Row>

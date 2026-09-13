@@ -281,7 +281,7 @@ export default function TrainingPanel({ active }) {
                     {/* ═══ 数据集预览 ═══ */}
                     <Row gutter={12} align="stretch">
                         <Col span={8}>
-                            <Card size="small" title="数据集概览" style={{ height: '100%' }}>
+                            <Card size="small" title="超声AScan数据集概览" style={{ height: '100%' }}>
                                 <div style={{ marginBottom: 16 }}>
                                     <span style={{ color: 'rgba(0, 0, 0, 0.45)' }}>总文件数：</span>
                                     <strong>{preview.total_files.toLocaleString()}</strong> 个

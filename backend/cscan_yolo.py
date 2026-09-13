@@ -11,6 +11,7 @@ CScan 图像 YOLO 缺陷检测推理模块（backend 专用，无 FastAPI 依赖
 """
 
 import os
+import json
 import shutil
 import math
 from datetime import datetime
@@ -53,16 +54,64 @@ def ultralytics_available() -> bool:
     return ULTRALYTICS_AVAILABLE
 
 
+def _default_model_stem(src_stat, classes) -> str:
+    """默认模型的有信息命名：yolo_<类别>_<mAP50>_<日期>_<时间>（mAP50 取自 results.csv）。"""
+    acc = None
+    csv = os.path.join(os.path.dirname(os.path.dirname(DEFAULT_SRC_MODEL)), "results.csv")
+    if os.path.isfile(csv):
+        try:
+            with open(csv, encoding="utf-8") as f:
+                head = f.readline().strip().split(",")
+                idx = head.index("metrics/mAP50(B)") if "metrics/mAP50(B)" in head else None
+                best = None
+                for ln in f:
+                    p = ln.strip().split(",")
+                    if idx is not None and idx < len(p):
+                        try:
+                            v = float(p[idx])
+                            best = v if best is None else max(best, v)
+                        except ValueError:
+                            pass
+                acc = best
+        except Exception:
+            acc = None
+    cls_part = "_".join(sorted(classes))
+    ts = datetime.fromtimestamp(src_stat.st_mtime).strftime("%Y%m%d_%H%M%S")
+    acc_part = f"{acc:.3f}" if acc is not None else "best"
+    return f"yolo_{cls_part}_{acc_part}_{ts}"
+
+
 def _ensure_default_model() -> str:
-    """首启：把训练产物 best.pt 拷进 backend/cscan_models（已 gitignore，不入库）。"""
+    """首启：把训练产物 best.pt 拷进 backend/cscan_models（已 gitignore，不入库），
+    命名为 yolo_<类别>_<mAP50>_<时间>，并写 .json meta。"""
     os.makedirs(CSCAN_MODELS_DIR, exist_ok=True)
     for fn in os.listdir(CSCAN_MODELS_DIR):
         if fn.lower().endswith(".pt"):
             return os.path.join(CSCAN_MODELS_DIR, fn)
     if not os.path.isfile(DEFAULT_SRC_MODEL):
         return ""
-    dst = os.path.join(CSCAN_MODELS_DIR, "cscan_v1_best.pt")
+    classes = [abbr for _cid, (abbr, _zh) in CSCAN_CLASSES.items()]
+    stem = _default_model_stem(os.stat(DEFAULT_SRC_MODEL), classes)
+    dst = os.path.join(CSCAN_MODELS_DIR, stem + ".pt")
     shutil.copy2(DEFAULT_SRC_MODEL, dst)
+    meta = {
+        "model_name": stem,
+        "model_file": stem + ".pt",
+        "model_type": "cscan_yolo",
+        "accuracy": None,
+        "saved_at": datetime.fromtimestamp(os.stat(DEFAULT_SRC_MODEL).st_mtime).isoformat(timespec="seconds"),
+        "class_names": sorted(classes),
+        "note": "训练产物 best.pt 自动收编",
+    }
+    # 从命名里取回 mAP50 写进 meta
+    parts = stem.split("_")
+    if len(parts) >= 3 and parts[-3].replace(".", "", 1).isdigit():
+        meta["accuracy"] = float(parts[-3])
+    try:
+        with open(os.path.join(CSCAN_MODELS_DIR, stem + ".json"), "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
     return dst
 
 

@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react'
-import { Card, Table, Tag, Statistic, Row, Col, Spin, Tooltip, Input, Select, Button, Space, Modal, message } from 'antd'
+import React, { useState, useEffect, useRef } from 'react'
+import { Card, Table, Tag, Statistic, Row, Col, Spin, Tooltip, Input, Select, Button, Space, Modal, message, Pagination } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import axios from 'axios'
 
 // 命名规则中 缺陷类型 对应的中文
 const DEFECT_LABELS = {
     OK: { color: 'green', text: '好区' },
+    Cr: { color: 'magenta', text: '裂纹' },
     Dl: { color: 'red', text: '分层' },
     Db: { color: 'orange', text: '脱粘' },
     Po: { color: 'volcano', text: '孔隙' },
@@ -44,6 +45,58 @@ const DEFECT_OPTS = Object.keys(DEFECT_LABELS).map(k => ({
     value: k, label: `${k} · ${DEFECT_LABELS[k].text}`,
 }))
 
+// 默认（CScan）编辑表单字段
+const DEFAULT_EDIT_FIELDS = [
+    { k: 'defectType', label: '缺陷类型', kind: 'select', opts: DEFECT_OPTS },
+    { k: 'structure', label: '结构', kind: 'select', opts: STRUCT_OPTS.map(v => ({ value: v, label: v })) },
+    { k: 'method', label: '方法', kind: 'select', opts: METHOD_OPTS.map(v => ({ value: v, label: v })) },
+    { k: 'code', label: '项目', kind: 'input' },
+    { k: 'fiber', label: '纤维', kind: 'select', opts: FIBER_OPTS.map(v => ({ value: v, label: v })) },
+    { k: 'matrix', label: '基体', kind: 'select', opts: MATRIX_OPTS.map(v => ({ value: v, label: v })) },
+    { k: 'fiberGrade', label: '纤维牌号', kind: 'input' },
+    { k: 'matrixGrade', label: '基体牌号', kind: 'input' },
+    { k: 'probe_type', label: '探头', kind: 'input' },
+    { k: 'timestamp', label: '时间戳(14位)', kind: 'input' },
+]
+const DEFAULT_EDIT_MAP = {
+    fromMeta: m => ({
+        fiber: m.fiber || '', matrix: m.matrix || '',
+        structure: m.structure || '', method: m.method || '',
+        defectType: m.defectType || '', code: m.code || '',
+        fiberGrade: m.fiberGrade || '', matrixGrade: m.matrixGrade || '',
+        probe_type: m.probe_type || '', description: m.description || '',
+        timestamp: m.timestamp || '',
+    }),
+    toMeta: v => v,
+}
+
+// 可拖拽调整列宽的表头单元格（antd 推荐方案；此处自实现，无需 react-resizable）
+function ResizableTitle({ onResize, width, children, ...rest }) {
+    if (!width || !onResize) return <th {...rest}>{children}</th>
+    return (
+        <th {...rest} style={{ ...(rest.style || {}), position: 'relative' }}>
+            {children}
+            <span
+                style={{
+                    position: 'absolute', right: 0, top: 0, bottom: 0, width: 8,
+                    cursor: 'col-resize', userSelect: 'none', touchAction: 'none', zIndex: 2,
+                }}
+                onMouseDown={e => {
+                    e.preventDefault(); e.stopPropagation()
+                    const startX = e.clientX, startW = width
+                    const onMove = ev => onResize(Math.max(56, Math.round(startW + ev.clientX - startX)))
+                    const onUp = () => {
+                        window.removeEventListener('mousemove', onMove)
+                        window.removeEventListener('mouseup', onUp)
+                    }
+                    window.addEventListener('mousemove', onMove)
+                    window.addEventListener('mouseup', onUp)
+                }}
+            />
+        </th>
+    )
+}
+
 export default function DatabaseOverview({
     endpoint = 'http://127.0.0.1:8000/dataset_overview',
     dirLabel = 'AScan 数据目录',
@@ -52,6 +105,10 @@ export default function DatabaseOverview({
     imageUrlFn = null,
     mergeMaterial = false,
     manageBase = '',   // 如 'http://127.0.0.1:8000/cscan/raw'：非空时文件列表显示 编辑/删除
+    thumbNode = null,  // (record) => { small, big }：自定义媒体缩略图（图片/视频）
+    editSpec = null,   // { fields, fromMeta(meta)->vals, toMeta(vals)->meta }：自定义编辑表单
+    deleteHint = '将移除原图/元数据/框，并删除派生切片、清理训练划分。',
+    hideColumns = [],  // 需要隐藏的列 key（如 ['method']）
 }) {
     const [data, setData] = useState(null)
     const [loading, setLoading] = useState(true)
@@ -61,36 +118,56 @@ export default function DatabaseOverview({
     const [editBusy, setEditBusy] = useState(false)
     const [editStem, setEditStem] = useState('')
     const [editVals, setEditVals] = useState({})
+    const [editInit, setEditInit] = useState({})   // 打开时的初值，用于判断是否有修改
+    const [tbodyH, setTbodyH] = useState(300)   // 表格体高度（自适应剩余空间）
+    const [page, setPage] = useState(1)
+    const [pageSize, setPageSize] = useState(5)
+    const [colW, setColW] = useState({})          // 用户拖拽后的列宽覆盖 {key: px}
+    const tableRef = useRef(null)               // 表格容器（用于测高）
 
     const refresh = () => {
         axios.get(endpoint).then(res => setData(res.data)).catch(err => console.error(err))
     }
 
-    // 编辑：拉 /cscan/raw/item 的边车 meta 填充表单
+    // 表格容器高度 → 可滚动高度（表头固定，仅表体滚动）
+    useEffect(() => {
+        const el = tableRef.current
+        if (!el) return
+        const recalc = () => setTbodyH(Math.max(160, el.clientHeight - 40))
+        recalc()
+        const ro = new ResizeObserver(recalc)
+        ro.observe(el)
+        return () => ro.disconnect()
+    }, [loading])
+
+    // 编辑表单配置（默认 CScan；其他数据集可传 editSpec 覆盖）
+    const editFields = editSpec?.fields || DEFAULT_EDIT_FIELDS
+    const editMap = editSpec || DEFAULT_EDIT_MAP
+
+    // 编辑：拉边车 meta 填充表单
     const openEdit = (stem) => {
-        setEditStem(stem); setEditOpen(true); setEditLoading(true); setEditVals({})
+        setEditStem(stem); setEditOpen(true); setEditLoading(true); setEditVals({}); setEditInit({})
         axios.get(`${manageBase}/item`, { params: { stem } })
             .then(r => {
-                const meta = r.data?.meta || {}
-                setEditVals({
-                    fiber: meta.fiber || '', matrix: meta.matrix || '',
-                    structure: meta.structure || '', method: meta.method || '',
-                    defectType: meta.defectType || '', code: meta.code || '',
-                    fiberGrade: meta.fiberGrade || '', matrixGrade: meta.matrixGrade || '',
-                    probe_type: meta.probe_type || '', description: meta.description || '',
-                    timestamp: meta.timestamp || '',
-                })
+                const vals = editMap.fromMeta(r.data?.meta || {})
+                setEditVals(vals)
+                setEditInit(vals)
             })
             .catch(() => { message.error('读取该记录失败'); setEditOpen(false) })
             .finally(() => setEditLoading(false))
     }
+    // 是否有修改：比较所有键（含描述等非表单字段）
+    const editChanged = Object.keys({ ...editInit, ...editVals })
+        .some(k => (editVals[k] ?? '') !== (editInit[k] ?? ''))
+
     const doEditSave = () => {
+        if (!editChanged) return        // 未修改不提交
         setEditBusy(true)
-        axios.put(`${manageBase}/${encodeURIComponent(editStem)}`, { meta: editVals })
+        axios.put(`${manageBase}/${encodeURIComponent(editStem)}`, { meta: editMap.toMeta(editVals) })
             .then(r => {
                 if (r.data?.error) { message.error(r.data.error); return }
                 setEditOpen(false)
-                message.success(`已更新 → ${r.data.filename}`)
+                message.success(`已更新 → ${r.data.filename || editStem}`)
                 refresh()
             })
             .catch(e => message.error('更新失败: ' + (e?.response?.data?.error || e.message)))
@@ -109,24 +186,11 @@ export default function DatabaseOverview({
     const askDelete = (stem, filename) => {
         Modal.confirm({
             title: '删除该条记录？',
-            content: <span>将移除原图/元数据/框，并删除派生切片、清理训练划分。<br /><b>{filename}</b></span>,
+            content: <span>{deleteHint}<br /><b>{filename}</b></span>,
             okText: '删除', okButtonProps: { danger: true }, cancelText: '取消',
             onOk: () => doDelete(stem),
         })
     }
-
-    const editFields = [
-        { k: 'defectType', label: '缺陷类型', kind: 'select', opts: DEFECT_OPTS },
-        { k: 'structure', label: '结构', kind: 'select', opts: STRUCT_OPTS.map(v => ({ value: v, label: v })) },
-        { k: 'method', label: '方法', kind: 'select', opts: METHOD_OPTS.map(v => ({ value: v, label: v })) },
-        { k: 'code', label: '项目', kind: 'input' },
-        { k: 'fiber', label: '纤维', kind: 'select', opts: FIBER_OPTS.map(v => ({ value: v, label: v })) },
-        { k: 'matrix', label: '基体', kind: 'select', opts: MATRIX_OPTS.map(v => ({ value: v, label: v })) },
-        { k: 'fiberGrade', label: '纤维牌号', kind: 'input' },
-        { k: 'matrixGrade', label: '基体牌号', kind: 'input' },
-        { k: 'probe_type', label: '探头', kind: 'input' },
-        { k: 'timestamp', label: '时间戳(14位)', kind: 'input' },
-    ]
 
     useEffect(() => {
         axios.get(endpoint)
@@ -145,37 +209,29 @@ export default function DatabaseOverview({
         : data.files.filter(f => tokens.every(t =>
             Object.values(f).some(v => v != null && String(v).toLowerCase().includes(t))))
 
-    // 按缺陷类型分组的列（Db 按结构拆分为 板板脱粘 / 板芯脱粘）
-    const defectColumns = [
-        { title: '缺陷类型', dataIndex: 'defect', key: 'defect', render: (d, record) => {
-            const info = DEFECT_LABELS[d] || { color: 'default', text: d }
-            return <Tag color={info.color}>{record.sub ? `Db · ${record.sub}` : `${d} — ${info.text}`}</Tag>
-        }},
-        { title: '文件数量', dataIndex: 'count', key: 'count' }
-    ]
-
-    // 分组数据：Db 按结构细分（BondPP=板板脱粘, BondSC=板芯脱粘），其余保持原样
-    const dbSubCount = {}
+    // 分组统计：复合缺陷按 & 拆开分别计数（'Dl&Po' → Dl +1、Po +1）；
+    // Db 再按结构细分（BondPP=板板脱粘, BondSC=板芯脱粘）
+    const groupMap = {}
     data.files.forEach(f => {
-        if (f.defect === 'Db') {
-            const sub = DB_STRUCTURE_TEXT[f.structure] || '脱粘'
-            dbSubCount[sub] = (dbSubCount[sub] || 0) + 1
-        }
+        String(f.defect || '?').split('&').map(s => s.trim()).filter(Boolean).forEach(code => {
+            const sub = code === 'Db' ? (DB_STRUCTURE_TEXT[f.structure] || '脱粘') : null
+            const key = sub ? `Db-${sub}` : code
+            if (!groupMap[key]) groupMap[key] = { key, defect: code, sub, count: 0 }
+            groupMap[key].count += 1
+        })
     })
-    const defectData = []
-    Object.entries(data.by_defect).forEach(([defect, v]) => {
-        if (defect === 'Db' && Object.keys(dbSubCount).length) {
-            Object.entries(dbSubCount).forEach(([sub, count]) => {
-                defectData.push({ key: `Db-${sub}`, defect: 'Db', sub, count })
-            })
-        } else {
-            defectData.push({ key: defect, defect, sub: null, count: v.count })
-        }
-    })
+    const defectData = Object.values(groupMap)
 
     // 文件详情列
     const fileColumns = [
-        ...(imageUrlFn ? [{
+        ...(thumbNode ? [{
+            title: '预览', dataIndex: 'media', key: 'image', width: 110,
+            render: (_, r) => {
+                const t = thumbNode(r) || {}
+                if (!t.small) return '-'
+                return <Tooltip title={t.big} mouseEnterDelay={0.1}><div style={{ display: 'inline-block', cursor: 'pointer' }}>{t.small}</div></Tooltip>
+            },
+        }] : imageUrlFn ? [{
             title: '图像', dataIndex: 'image', key: 'image', width: 90,
             render: (_, r) => {
                 const url = imageUrlFn(r.filename)
@@ -194,20 +250,20 @@ export default function DatabaseOverview({
                 )
             }
         }] : []),
-        { title: '文件名', dataIndex: 'filename', key: 'filename', width: 320, ellipsis: true },
+        { title: '文件名', dataIndex: 'filename', key: 'filename', width: 220, ellipsis: true },
         ...(mergeMaterial
             ? [{ title: '纤维/基体', key: 'fiberMatrix', width: 90, render: (_, r) => `${r.fiber}/${r.matrix}` }]
             : [
                 { title: '纤维类型', dataIndex: 'fiber', key: 'fiber', width: 80 },
                 { title: '基体类型', dataIndex: 'matrix', key: 'matrix', width: 80 },
             ]),
-        { title: '结构', dataIndex: 'structure', key: 'structure', width: 100 },
-        { title: '检测方法', dataIndex: 'method', key: 'method', width: 90 },
+        { title: '结构', dataIndex: 'structure', key: 'structure', width: 88 },
+        { title: '检测方法', dataIndex: 'method', key: 'method', width: 84 },
         {
             title: '缺陷类型',
             dataIndex: 'defect',
             key: 'defect',
-            width: 130,
+            width: 120,
             render: (d, record) => {
                 const info = DEFECT_LABELS[d] || { color: 'default', text: d }
                 const text = d === 'Db' && DB_STRUCTURE_TEXT[record.structure]
@@ -216,10 +272,10 @@ export default function DatabaseOverview({
                 return <Tag color={info.color}>{text}</Tag>
             }
         },
-        { title: '项目', dataIndex: 'model', key: 'model', width: 80 },
+        { title: '项目', dataIndex: 'model', key: 'model', width: 72 },
         ...extraColumns,
         ...(manageBase ? [{
-            title: '操作', key: 'ops', width: 120,
+            title: '操作', key: 'ops', width: 96,
             render: (_, r) => {
                 const stem = String(r.filename).replace(/\.[^.]+$/, '')
                 return (
@@ -231,10 +287,20 @@ export default function DatabaseOverview({
                 )
             },
         }] : []),
-    ]
+    ].filter(c => !hideColumns.includes(c.key))
+
+    // 应用（可拖拽的）列宽
+    const sizedColumns = fileColumns.map(c => {
+        const w = colW[c.key] ?? c.width ?? 100
+        return {
+            ...c, width: w,
+            onHeaderCell: () => ({ width: w, onResize: v => setColW(prev => ({ ...prev, [c.key]: v })) }),
+        }
+    })
+    const totalW = sizedColumns.reduce((s, c) => s + (c.width || 100), 0)
 
     return (
-        <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
 
             {/* 第一行：统计卡片：总文件数，缺陷类型数，最大缺陷组，数据集目录 */}
             <Row gutter={16}>
@@ -245,12 +311,12 @@ export default function DatabaseOverview({
                 </Col>
                 <Col span={6}>
                     <Card size="small">
-                        <Statistic title="缺陷类型数" value={Object.keys(data.by_defect).length} />
+                        <Statistic title="缺陷类型数" value={defectData.length} />
                     </Card>
                 </Col>
                 <Col span={6}>
                     <Card size="small">
-                        <Statistic title="最大缺陷组" value={Math.max(...Object.values(data.by_defect).map(v => v.count))} />
+                        <Statistic title="最大缺陷组" value={defectData.length ? Math.max(...defectData.map(d => d.count)) : 0} />
                     </Card>
                 </Col>
                 <Col span={6}>
@@ -260,40 +326,62 @@ export default function DatabaseOverview({
                 </Col>
             </Row>
 
-            {/* 第二行：按缺陷类型分组 */}
-            <Card title="按缺陷类型分组" size="small">
-                <Table
-                    columns={defectColumns}
-                    dataSource={defectData}
-                    pagination={false}
-                    size="small"
-                />
+            {/* 第二行：按缺陷类型分组（横向标签，紧凑） */}
+            <Card title="按缺陷类型分组" size="small" styles={{ body: { padding: '8px 12px' } }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {defectData.map(d => {
+                        const info = DEFECT_LABELS[d.defect] || { color: 'default', text: d.defect }
+                        const label = d.sub ? `${d.defect} · ${d.sub}` : `${d.defect} · ${info.text}`
+                        return (
+                            <Tag key={d.key} color={info.color} style={{ marginRight: 0, fontSize: 13, padding: '2px 10px' }}>
+                                {label}
+                                <b style={{ marginLeft: 8 }}>{d.count}</b>
+                            </Tag>
+                        )
+                    })}
+                </div>
             </Card>
 
-            {/* 第三行：文件列表 */}
+            {/* 第三行：文件列表（卡头/表头固定，仅表体滚动；分页在卡头右侧） */}
             <Card
-                title="文件列表"
                 size="small"
-                style={{ flex: 1, overflow: 'auto' }}
-                bodyStyle={{ padding: 8 }}
+                style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+                styles={{ body: { padding: 8, flex: 1, minHeight: 0, overflow: 'hidden' } }}
+                title="文件列表"
                 extra={
                     <Input
                         allowClear
                         prefix={<SearchOutlined style={{ color: '#999' }} />}
                         placeholder="搜索（& 表示且），如 T1100&Plate"
                         value={kw}
-                        onChange={e => setKw(e.target.value)}
+                        onChange={e => { setKw(e.target.value); setPage(1) }}
                         style={{ width: 280 }}
                     />
                 }
             >
-                <Table
-                    columns={fileColumns}
-                    dataSource={visibleFiles.map((f, i) => ({ ...f, key: i }))}
-                    size="small"
-                    locale={{ emptyText: tokens.length ? '无匹配条目' : '暂无数据' }}
-                    pagination={{ pageSize: 5, showSizeChanger: true, showTotal: t => `共 ${t} 个文件`, pageSizeOptions: ['5', '10', '20', '50'] }}
-                />
+                <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                    <div ref={tableRef} style={{ flex: 1, minHeight: 0 }}>
+                        <Table
+                            columns={sizedColumns}
+                            components={{ header: { cell: ResizableTitle } }}
+                            dataSource={visibleFiles.slice((page - 1) * pageSize, page * pageSize).map((f, i) => ({ ...f, key: (page - 1) * pageSize + i }))}
+                            size="small"
+                            scroll={{ x: totalW, y: tbodyH }}
+                            tableLayout="fixed"
+                            locale={{ emptyText: tokens.length ? '无匹配条目' : '暂无数据' }}
+                            pagination={false}
+                        />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 6 }}>
+                        <Pagination
+                            size="small" simple
+                            current={page} pageSize={pageSize} total={visibleFiles.length}
+                            pageSizeOptions={['5', '10', '20', '50']}
+                            showSizeChanger
+                            onChange={(p, ps) => { setPage(p); setPageSize(ps) }}
+                        />
+                    </div>
+                </div>
             </Card>
 
             {/* 编辑记录：元数据表单（命名字段改动会同步改名并重新切片） */}
@@ -304,6 +392,7 @@ export default function DatabaseOverview({
                 onCancel={() => setEditOpen(false)}
                 okText="保存" cancelText="取消"
                 confirmLoading={editBusy}
+                okButtonProps={{ disabled: !editChanged }}
                 width={560}
             >
                 <Spin spinning={editLoading}>
